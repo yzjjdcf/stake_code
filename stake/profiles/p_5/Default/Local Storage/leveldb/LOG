@@ -1,2 +1,3 @@
-2025/12/29-01:32:15.436 2d20 Creating DB D:\project\stake_code\stake\profiles\p_5\Default\Local Storage\leveldb since it was missing.
-2025/12/29-01:32:15.443 2d20 Reusing MANIFEST D:\project\stake_code\stake\profiles\p_5\Default\Local Storage\leveldb/MANIFEST-000001
+2025/12/29-04:48:55.448 6d28 Reusing MANIFEST D:\project\stake_code\stake\profiles\p_5\Default\Local Storage\leveldb/MANIFEST-000001
+2025/12/29-04:48:55.453 6d28 Recovering log #3
+2025/12/29-04:48:55.455 6d28 Reusing old log D:\project\stake_code\stake\profiles\p_5\Default\Local Storage\leveldb/000003.log 

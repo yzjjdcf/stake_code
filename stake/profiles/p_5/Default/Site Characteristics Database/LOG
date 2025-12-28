@@ -1,2 +1,3 @@
-2025/12/29-01:32:15.393 6290 Creating DB D:\project\stake_code\stake\profiles\p_5\Default\Site Characteristics Database since it was missing.
-2025/12/29-01:32:15.401 6290 Reusing MANIFEST D:\project\stake_code\stake\profiles\p_5\Default\Site Characteristics Database/MANIFEST-000001
+2025/12/29-04:48:55.247 6fa8 Reusing MANIFEST D:\project\stake_code\stake\profiles\p_5\Default\Site Characteristics Database/MANIFEST-000001
+2025/12/29-04:48:55.250 6fa8 Recovering log #3
+2025/12/29-04:48:55.250 6fa8 Reusing old log D:\project\stake_code\stake\profiles\p_5\Default\Site Characteristics Database/000003.log 

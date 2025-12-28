@@ -75,32 +75,54 @@ def get_proxy_ext(proxy_url, t_id):
 
 def run_pre_logic(account):
     """
-    针对中文版 Stake 优化的过盾逻辑
+    针对中文版 Stake 优化的过盾逻辑 - 已修复多开冲突
     """
     account.bypass_trigger_time = timezone.now()
     account.save()
 
-    # 1. 代理分配 (保持原样)
+    # 1. 代理分配逻辑
     if not account.proxy:
+        print(f"[*] 账号 {account.username} 未绑定代理，正在分配...")
         proxy = ProxyPool.objects.filter(is_active=True, stakeaccount__isnull=True).first()
         if not proxy:
             proxy = ProxyPool.objects.filter(is_active=True).order_by('?').first()
+
         if proxy:
             StakeAccount.objects.filter(pk=account.id).update(proxy=proxy)
             account.proxy = proxy
+        else:
+            print(f"[!] 错误：账号 {account.username} 无可用代理")
+            return
+
+    # --- 获取并更新代理归属地 ---
+    if not getattr(account.proxy, 'location', None):
+        print(f"[*] 正在识别代理归属地: {account.proxy.address.split('@')[-1]}...")
+        location = fetch_ip_location(account.proxy.address)
+        ProxyPool.objects.filter(pk=account.proxy.pk).update(location=location)
+        account.proxy.location = location
+
+    print(
+        f"[+] 账号: {account.username} | 代理: {account.proxy.address.split(':')[-1]} | 地区: {account.proxy.location}")
 
     # 2. 启动环境
     ext_path = get_proxy_ext(account.proxy.address, account.id)
     co = ChromiumOptions()
+
+    # --- 【关键修复：解决多开浏览器冲突】 ---
+    # 为每个账号分配一个独立端口（9000 + ID），防止多个浏览器挤在同一个端口导致失效
+    unique_port = 9000 + (account.id % 1000)
+    co.set_address(f'127.0.0.1:{unique_port}')
+
     co.set_load_mode('none')
     co.set_user_data_path(os.path.abspath(f'./profiles/p_{account.id}'))
     if ext_path:
         co.add_extension(ext_path)
 
+    # 每个线程现在会启动完全独立的浏览器进程
     page = ChromiumPage(co)
 
     try:
-        print(f"[*] {account.username} 正在发起请求...")
+        print(f"[*] {account.username} 正在发起请求 (端口: {unique_port})...")
         page.get('https://stake.com/')
 
         start_time = time.time()
@@ -113,34 +135,32 @@ def run_pre_logic(account):
             curr_title = page.title
 
             # --- [判定逻辑：是否已经成功进入 Stake] ---
-            # 1. 检查你提供的 Log 中的中文标题
-            # 2. 检查中文界面下的常用按钮文字
             is_in_stake = (
                                   ("Stake" in curr_title and "赌场" in curr_title) or
                                   ("stake.com" in curr_url and "challenges" not in curr_url)
                           ) and (
                                   page.ele('@data-testid=search-button', timeout=0.5) or
-                                  page.ele('text=娱乐场', timeout=0.5) or  # 中文版关键词
-                                  page.ele('text=体育', timeout=0.5) or  # 中文版关键词
-                                  page.ele('text=Casino', timeout=0.5)  # 英文版兜底
+                                  page.ele('text=娱乐场', timeout=0.5) or
+                                  page.ele('text=体育', timeout=0.5) or
+                                  page.ele('text=Casino', timeout=0.5)
                           )
 
             if is_in_stake:
                 print(f"[!] {account.username}: 识别到 Stake 中文主站！准备收割 Cookie...")
-                # 📢 既然已经进去了，说明盾肯定没了，等 10 秒让 Cookie 刷新
                 time.sleep(10)
 
                 cookies = page.cookies()
                 cookies_dict = {c['name']: c['value'] for c in cookies}
 
-                # 检查是否拿到了关键的 cf_clearance
                 if 'cf_clearance' in cookies_dict:
                     print(f"[✔] 账号 {account.username} 过盾成功，Cookie 已保存。")
-                    account.cookies_json = json.dumps(cookies)
-                    account.user_agent = page.user_agent
-                    account.bypass_success_time = timezone.now()
-                    account.save()
-                    break  # 成功跳出循环
+                    # 仅更新必要的字段，极大减少锁定时间
+                    StakeAccount.objects.filter(pk=account.pk).update(
+                        cookies_json=json.dumps(cookies),
+                        user_agent=page.user_agent,
+                        bypass_success_time=timezone.now()
+                    )
+                    break
                 else:
                     print(f"[?] 已进入主站但 cf_clearance 尚未写入，继续轮询...")
 
@@ -154,7 +174,6 @@ def run_pre_logic(account):
             if is_cf:
                 print(f"[.] {account.username}: 仍处于验证页面...")
             else:
-                # 打印标题，方便观察状态转换
                 print(f"[.] {account.username}: 正在等待组件渲染... 当前标题: {curr_title}")
 
             time.sleep(4)
@@ -163,6 +182,7 @@ def run_pre_logic(account):
         print(f"[!] {account.username} 运行异常: {e}")
     finally:
         print(f"[*] 正在关闭账号 {account.username} 的浏览器...")
+        # 注意：多开环境下必须使用 quit() 彻底杀掉进程，释放端口
         page.quit()
         if ext_path and os.path.exists(ext_path):
             try:
@@ -174,3 +194,25 @@ def parse_proxy(raw_url):
     """解析工具函数"""
     p = urllib.parse.urlparse(raw_url)
     return {'user': p.username, 'pass': p.password, 'host': p.hostname, 'port': p.port}
+
+
+def fetch_ip_location(proxy_addr):
+    """通过代理获取其归属地"""
+    proxies = {"http": proxy_addr, "https": proxy_addr}
+    try:
+        # 使用 ip-api.com，无需 Key，直接返回 JSON
+        # 注意：这里也用 curl_cffi 防止被反爬
+        from curl_cffi import requests as curl_requests
+        resp = curl_requests.get(
+            "http://ip-api.com/json/?lang=zh-CN",
+            proxies=proxies,
+            timeout=5,
+            impersonate="chrome110"
+        )
+        data = resp.json()
+        if data.get('status') == 'success':
+            # 返回 格式如：香港、德国、美国
+            return data.get('country')
+    except:
+        pass
+    return "未知"

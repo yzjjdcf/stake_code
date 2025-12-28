@@ -8,7 +8,7 @@ import threading
 class ProxyPool(models.Model):
     address = models.CharField("代理地址", max_length=255)
     is_active = models.BooleanField("是否可用", default=True)
-
+    location = models.CharField(max_length=100, null=True, blank=True)  # 新增：存储归属地
     def __str__(self):
         return self.address
 

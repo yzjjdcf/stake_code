@@ -1,2 +1,3 @@
-2025/12/29-01:32:15.509 3598 Creating DB D:\project\stake_code\stake\profiles\p_5\Default\shared_proto_db since it was missing.
-2025/12/29-01:32:15.513 3598 Reusing MANIFEST D:\project\stake_code\stake\profiles\p_5\Default\shared_proto_db/MANIFEST-000001
+2025/12/29-04:48:55.567 5e50 Reusing MANIFEST D:\project\stake_code\stake\profiles\p_5\Default\shared_proto_db/MANIFEST-000001
+2025/12/29-04:48:55.567 5e50 Recovering log #3
+2025/12/29-04:48:55.567 5e50 Reusing old log D:\project\stake_code\stake\profiles\p_5\Default\shared_proto_db/000003.log 

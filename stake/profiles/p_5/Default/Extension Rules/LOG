@@ -1,2 +1,3 @@
-2025/12/29-01:32:15.401 68a4 Creating DB D:\project\stake_code\stake\profiles\p_5\Default\Extension Rules since it was missing.
-2025/12/29-01:32:15.407 68a4 Reusing MANIFEST D:\project\stake_code\stake\profiles\p_5\Default\Extension Rules/MANIFEST-000001
+2025/12/29-04:48:55.567 6518 Reusing MANIFEST D:\project\stake_code\stake\profiles\p_5\Default\Extension Rules/MANIFEST-000001
+2025/12/29-04:48:55.567 6518 Recovering log #3
+2025/12/29-04:48:55.567 6518 Reusing old log D:\project\stake_code\stake\profiles\p_5\Default\Extension Rules/000003.log 
