@@ -1,0 +1,17 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<div id="content-main">
+    <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        <fieldset class="module aligned">
+            <div class="form-row">
+                {{ form.as_p }}
+            </div>
+        </fieldset>
+        <div class="submit-row">
+            <input type="submit" value="确认导入" class="default" name="_save">
+            <a href=".." class="closelink">取消</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

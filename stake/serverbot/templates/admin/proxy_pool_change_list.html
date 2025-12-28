@@ -1,0 +1,7 @@
+{% extends "admin/change_list.html" %}
+{% block object-tools-items %}
+    <li>
+        <a href="import-proxies/" class="addlink">批量粘贴/上传代理池</a>
+    </li>
+    {{ block.super }}
+{% endblock %}
