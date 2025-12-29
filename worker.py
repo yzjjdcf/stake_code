@@ -15,7 +15,7 @@ project_root = os.path.dirname(current_dir)
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'stake.settings')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'manager.settings')
 django.setup()
 
 from serverbot.models import StakeAccount, ProxyPool

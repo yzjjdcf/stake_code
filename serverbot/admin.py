@@ -4,8 +4,8 @@ import threading  # 必须导入，否则 re_warmup 会报错
 from django.shortcuts import render, redirect
 from django.urls import path
 from django.contrib import admin, messages
-from unfold.admin import ModelAdmin
 
+from . import models
 from .models import StakeAccount, ProxyPool, CodeRecord, ClaimRecord
 from .forms import ProxyImportForm
 from .utils import run_pre_logic  # 确保导入了你的核心逻辑
@@ -14,7 +14,7 @@ import urllib.parse  # 必须写全，才能直接使用 urllib.parse.urlparse
 
 # 1. 代理池管理：只管理代理地址和导入功能
 @admin.register(ProxyPool)
-class ProxyPoolAdmin(ModelAdmin):
+class ProxyPoolAdmin(admin.ModelAdmin):
     # 修正点：ProxyPool 表里只有 address 和 is_active
     list_display = ('address', 'is_active')
 
@@ -59,7 +59,7 @@ class ProxyPoolAdmin(ModelAdmin):
 
 
 @admin.register(StakeAccount)
-class StakeAccountAdmin(ModelAdmin):
+class StakeAccountAdmin(admin.ModelAdmin):
     # 1. 将 'update_cf_button' 加入列表显示
     # "cf_clearance",
     # 1. 更新 list_display，加入新增字段和耗时显示
@@ -153,7 +153,7 @@ class StakeAccountAdmin(ModelAdmin):
             path(
                 '<int:account_id>/run-warmup/',
                 self.admin_site.admin_view(self.run_warmup_view),
-                name='stake-account-warmup',
+                name='manager-account-warmup',
             ),
         ]
         return custom_urls + urls

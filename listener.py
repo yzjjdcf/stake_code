@@ -11,7 +11,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 # ================= 2. 初始化 Django 环境 =================
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'stake.settings')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'manager.settings')
 django.setup()
 
 # 导入领取函数

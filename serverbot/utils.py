@@ -137,7 +137,7 @@ def run_pre_logic(account):
             # --- [判定逻辑：是否已经成功进入 Stake] ---
             is_in_stake = (
                                   ("Stake" in curr_title and "赌场" in curr_title) or
-                                  ("stake.com" in curr_url and "challenges" not in curr_url)
+                                  ("manager.com" in curr_url and "challenges" not in curr_url)
                           ) and (
                                   page.ele('@data-testid=search-button', timeout=0.5) or
                                   page.ele('text=娱乐场', timeout=0.5) or
