@@ -9,6 +9,36 @@ from django.utils import timezone
 from DrissionPage import ChromiumPage, ChromiumOptions
 from .models import StakeAccount, ProxyPool
 
+# 导入配置
+import sys
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)  # 项目根目录（包含config.py）
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+try:
+    import config
+except ImportError:
+    # 如果导入失败，尝试使用绝对路径
+    import importlib.util
+    config_path = os.path.join(project_root, 'config.py')
+    if os.path.exists(config_path):
+        spec = importlib.util.spec_from_file_location("config", config_path)
+        config = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(config)
+    else:
+        raise ImportError(f"无法找到配置文件: {config_path}")
+
+from config import (
+    PROXY_EXT_DIR,
+    PROFILES_DIR,
+    BROWSER_PATH,
+    BROWSER_HEADLESS,
+    BROWSER_PORT_START,
+    BROWSER_PORT_RANGE,
+    BYPASS_TIMEOUT
+)
+
 
 # 1. 代理插件生成逻辑 (处理带账号密码的代理)
 def get_proxy_ext(proxy_url, t_id):
@@ -62,9 +92,10 @@ def get_proxy_ext(proxy_url, t_id):
     );
     '''
 
-    ext_dir = os.path.abspath(f'./proxy_ext_{t_id}')
+    # 使用配置的目录，确保跨平台兼容
+    ext_dir = os.path.join(PROXY_EXT_DIR, f'proxy_ext_{t_id}')
     if not os.path.exists(ext_dir):
-        os.makedirs(ext_dir)
+        os.makedirs(ext_dir, exist_ok=True)
 
     with open(os.path.join(ext_dir, 'manifest.json'), 'w') as f:
         json.dump(manifest_json, f)
@@ -109,12 +140,22 @@ def run_pre_logic(account):
     co = ChromiumOptions()
 
     # --- 【关键修复：解决多开浏览器冲突】 ---
-    # 为每个账号分配一个独立端口（9000 + ID），防止多个浏览器挤在同一个端口导致失效
-    unique_port = 9000 + (account.id % 1000)
+    # 为每个账号分配一个独立端口，防止多个浏览器挤在同一个端口导致失效
+    unique_port = BROWSER_PORT_START + (account.id % BROWSER_PORT_RANGE)
     co.set_address(f'127.0.0.1:{unique_port}')
 
+    # 设置浏览器路径（Linux可能需要指定）
+    if BROWSER_PATH:
+        co.set_browser_path(BROWSER_PATH)
+    
+    # 设置无头模式（Linux通常需要）
+    if BROWSER_HEADLESS:
+        co.headless(True)
+    
     co.set_load_mode('none')
-    co.set_user_data_path(os.path.abspath(f'./profiles/p_{account.id}'))
+    # 使用配置的profiles目录，确保跨平台兼容
+    profile_path = os.path.join(PROFILES_DIR, f'p_{account.id}')
+    co.set_user_data_path(profile_path)
     if ext_path:
         co.add_extension(ext_path)
 
@@ -127,7 +168,7 @@ def run_pre_logic(account):
 
         start_time = time.time()
         while True:
-            if time.time() - start_time > 300:
+            if time.time() - start_time > BYPASS_TIMEOUT:
                 print(f"[×] {account.username} 过盾超时")
                 break
 
@@ -137,7 +178,7 @@ def run_pre_logic(account):
             # --- [判定逻辑：是否已经成功进入 Stake] ---
             is_in_stake = (
                                   ("Stake" in curr_title and "赌场" in curr_title) or
-                                  ("manager.com" in curr_url and "challenges" not in curr_url)
+                                  ("stake.com" in curr_url and "challenges" not in curr_url)
                           ) and (
                                   page.ele('@data-testid=search-button', timeout=0.5) or
                                   page.ele('text=娱乐场', timeout=0.5) or

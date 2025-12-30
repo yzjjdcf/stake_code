@@ -1,1 +1,48 @@
-/stake/profiles/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# 虚拟环境
+.venv/
+venv/
+ENV/
+env/
+
+# Django
+*.log
+# db.sqlite3  # 注释掉，允许提交数据库文件
+db.sqlite3-journal
+*.pot
+*.pyc
+local_settings.py
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 项目特定
+data/profiles/
+data/proxy_ext/
+stake_listener_session.session*
+stake_listener_session.session-journal
+# stake/db.sqlite3  # 注释掉，允许提交数据库文件
+stake/stake_listener_session.session*
+
+# 临时文件
+*.tmp
+*.bak
+*.cache

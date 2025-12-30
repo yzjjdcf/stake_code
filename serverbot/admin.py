@@ -170,9 +170,125 @@ class StakeAccountAdmin(admin.ModelAdmin):
 
 @admin.register(CodeRecord)
 class CodeRecordAdmin(admin.ModelAdmin):
-    list_display = ('code', 'actual_value', 'is_timeout_trigger', 'created_at')
+    list_display = (
+        'code',
+        'get_status_display_colored',
+        'actual_value',
+        'get_statistics',
+        'get_claim_details_link',
+        'created_at',
+        'updated_at'
+    )
+    list_filter = ('status', 'created_at', 'is_timeout_trigger')
+    search_fields = ('code',)
+    readonly_fields = ('total_attempts', 'success_count', 'failure_count', 'error_403_count', 'created_at', 'updated_at')
+    
+    fieldsets = (
+        ('基本信息', {
+            'fields': ('code', 'status', 'actual_value', 'is_timeout_trigger')
+        }),
+        ('统计信息', {
+            'fields': ('total_attempts', 'success_count', 'failure_count', 'error_403_count')
+        }),
+        ('时间信息', {
+            'fields': ('created_at', 'updated_at')
+        }),
+    )
+    
+    def get_status_display_colored(self, obj):
+        """带颜色的状态显示"""
+        colors = {
+            'valid': '#28a745',      # 绿色
+            'invalid': '#dc3545',     # 红色
+            'expired': '#ffc107',     # 黄色
+            'claimed': '#6c757d',    # 灰色
+            'unknown': '#17a2b8',     # 蓝色
+        }
+        status_display = obj.get_status_display()
+        color = colors.get(obj.status, '#000')
+        return mark_safe(
+            f'<span style="color: {color}; font-weight: bold;">{status_display}</span>'
+        )
+    get_status_display_colored.short_description = '状态'
+    
+    def get_statistics(self, obj):
+        """显示统计信息"""
+        if obj.total_attempts == 0:
+            return mark_safe('<span style="color: gray;">暂无数据</span>')
+        
+        success_rate = (obj.success_count / obj.total_attempts * 100) if obj.total_attempts > 0 else 0
+        return mark_safe(
+            f'<div style="font-size: 11px;">'
+            f'总尝试: <strong>{obj.total_attempts}</strong><br>'
+            f'成功: <span style="color: #28a745;">{obj.success_count}</span> | '
+            f'失败: <span style="color: #dc3545;">{obj.failure_count}</span> | '
+            f'403: <span style="color: #ffc107;">{obj.error_403_count}</span><br>'
+            f'成功率: <strong>{success_rate:.1f}%</strong>'
+            f'</div>'
+        )
+    get_statistics.short_description = '统计信息'
+    
+    def get_claim_details_link(self, obj):
+        """显示领取明细链接"""
+        count = obj.claim_records.count()
+        if count == 0:
+            return mark_safe('<span style="color: gray;">无记录</span>')
+        url = f'/admin/serverbot/claimrecord/?code_record__id__exact={obj.id}'
+        return mark_safe(f'<a href="{url}">查看明细 ({count})</a>')
+    get_claim_details_link.short_description = '领取明细'
+    
+    def get_queryset(self, request):
+        """优化查询，预加载关联数据"""
+        qs = super().get_queryset(request)
+        return qs.prefetch_related('claim_records')
+
 
 @admin.register(ClaimRecord)
 class ClaimRecordAdmin(admin.ModelAdmin):
-    list_display = ('account', 'code', 'status', 'bonus_value', 'response_time_ms', 'is_retry', 'created_at')
-    list_filter = ('status', 'created_at')
+    list_display = (
+        'code',
+        'account',
+        'get_status_display_colored',
+        'bonus_value',
+        'response_time_ms',
+        'is_retry',
+        'created_at'
+    )
+    list_filter = ('status', 'created_at', 'code_record')
+    search_fields = ('code', 'account__username')
+    readonly_fields = ('created_at',)
+    
+    fieldsets = (
+        ('基本信息', {
+            'fields': ('code_record', 'code', 'account', 'status')
+        }),
+        ('结果信息', {
+            'fields': ('bonus_value', 'response_time_ms', 'is_retry', 'error_message')
+        }),
+        ('时间信息', {
+            'fields': ('created_at',)
+        }),
+    )
+    
+    def get_status_display_colored(self, obj):
+        """带颜色的状态显示"""
+        colors = {
+            'success': '#28a745',        # 绿色
+            'failure': '#dc3545',         # 红色
+            'error_403': '#ffc107',       # 黄色
+            'not_found': '#6c757d',       # 灰色
+            'inactive': '#17a2b8',        # 蓝色
+            'already_claimed': '#6f42c1', # 紫色
+            'error': '#dc3545',           # 红色
+        }
+        status_display = obj.get_status_display()
+        color = colors.get(obj.status, '#000')
+        return mark_safe(
+            f'<span style="color: {color}; font-weight: bold;">{status_display}</span>'
+        )
+    get_status_display_colored.short_description = '状态'
+    
+    def get_queryset(self, request):
+        """优化查询"""
+        qs = super().get_queryset(request)
+        return qs.select_related('account', 'code_record')
