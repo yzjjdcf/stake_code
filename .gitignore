@@ -46,3 +46,9 @@ stake/stake_listener_session.session*
 *.tmp
 *.bak
 *.cache
+
+# 日志和PID文件
+logs/
+pids/
+*.log
+*.pid

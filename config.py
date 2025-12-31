@@ -1,7 +1,3 @@
-"""
-平台配置文件
-通过 PLATFORM 变量来区分 Windows 和 Linux 环境
-"""
 import os
 import platform
 
@@ -33,13 +29,12 @@ TELEGRAM_TARGET_CHANNEL = 'stake_cn_chat_room'
 
 # Telegram 代理配置（根据平台不同）
 if IS_WINDOWS:
-    # Windows 配置
+    # Windows 配置（通常需要代理）
     TELEGRAM_PROXY = ('socks5', '127.0.0.1', 10808)
     TELEGRAM_SESSION_FILE = 'stake_listener_session'
 else:
-    # Linux 配置（如果没有本地代理，可以设置为 None）
-    # TELEGRAM_PROXY = None  # 不使用代理
-    TELEGRAM_PROXY = ('socks5', '127.0.0.1', 10808)  # 如果有代理服务器
+    # Linux 配置（通常不需要代理，可以直接访问）
+    TELEGRAM_PROXY = None  # Linux 服务器通常可以直接访问 Telegram
     TELEGRAM_SESSION_FILE = 'stake_listener_session'
 
 # ==================== 浏览器配置 ====================
@@ -50,9 +45,41 @@ if IS_WINDOWS:
     BROWSER_HEADLESS = False  # Windows 可以显示浏览器窗口
 else:
     # Linux: 通常需要无头模式
-    BROWSER_PATH = None  # 如果系统安装了 Chrome/Chromium，可以设置为 None
-    # 如果 Chrome 不在 PATH 中，可以指定路径，例如：
-    # BROWSER_PATH = '/usr/bin/google-chrome'  # 或 '/usr/bin/chromium-browser'
+    # ==================== 浏览器选择 ====================
+    # 可选值: 'auto', 'chromium', 'google-chrome', 'chromium-browser', 'google-chrome-stable'
+    # 或者直接指定路径，例如: '/usr/bin/chromium'
+    BROWSER_TYPE = 'google-chrome'  # 'auto' 表示自动检测，按优先级选择
+    
+    # 浏览器检测优先级（从高到低）
+    BROWSER_PRIORITY = [
+        'chromium',              # 推荐：chromium（不带 -browser 后缀）
+        'google-chrome',         # Google Chrome
+        'google-chrome-stable',  # Google Chrome Stable
+        'chromium-browser',      # chromium-browser（可能有问题）
+    ]
+    
+    # 自动检测浏览器路径
+    import shutil
+    _browser_path = None
+    
+    if BROWSER_TYPE == 'auto':
+        # 按优先级自动检测
+        for browser_name in BROWSER_PRIORITY:
+            _browser_path = shutil.which(browser_name)
+            if _browser_path:
+                break
+    elif BROWSER_TYPE.startswith('/'):
+        # 直接指定路径
+        _browser_path = BROWSER_TYPE if os.path.exists(BROWSER_TYPE) else None
+    else:
+        # 指定浏览器名称
+        _browser_path = shutil.which(BROWSER_TYPE)
+    
+    # 如果自动检测失败，可以手动指定路径
+    # BROWSER_PATH = '/usr/bin/chromium'
+    # BROWSER_PATH = '/usr/bin/google-chrome'
+    BROWSER_PATH = _browser_path  # 自动检测的路径，如果为 None 则需要手动配置
+    
     BROWSER_HEADLESS = True  # Linux 服务器通常无显示器，使用无头模式
 
 # 浏览器端口范围（每个账号使用独立端口）
@@ -72,4 +99,3 @@ REQUEST_DELAY_MAX = 0.3
 
 # 日志配置
 LOG_LEVEL = 'INFO'  # DEBUG, INFO, WARNING, ERROR
-

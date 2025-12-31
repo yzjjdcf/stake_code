@@ -1,0 +1,17 @@
+[Unit]
+Description=Stake Telegram Listener
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/stake_code
+Environment="PATH=/root/stake_code/venv/bin"
+Environment="STAKE_PLATFORM=linux"
+ExecStart=/root/stake_code/venv/bin/python listener.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+

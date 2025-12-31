@@ -117,26 +117,73 @@ class StakeAccountAdmin(admin.ModelAdmin):
     def update_cf_button(self, obj):
         return mark_safe(
             f'''
-                    <button type="button" class="button" 
-                        onclick="runWarmup({obj.id}, '{obj.username}')"
-                        style="background-color: #28a745; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer;">
-                        🔄 强制更新 CF
-                    </button>
+                    <div style="display: flex; gap: 5px;">
+                        <button type="button" class="button" 
+                            onclick="runWarmup({obj.id}, '{obj.username}')"
+                            style="background-color: #28a745; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer;">
+                            🔄 强制更新 CF
+                        </button>
+                        <button type="button" class="button" 
+                            onclick="deleteCF({obj.id}, '{obj.username}')"
+                            style="background-color: #dc3545; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer;">
+                            🗑️ 删除 CF
+                        </button>
+                    </div>
                     <script>
                     if (typeof runWarmup === 'undefined') {{
                         window.runWarmup = function(id, name) {{
-                            // 这里删除了原来的 confirm 弹窗判断，直接发送请求
-                            const csrftoken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+                            if (!confirm('确定要强制更新 ' + name + ' 的 CF 吗？')) {{
+                                return;
+                            }}
+                            const csrftoken = document.querySelector('[name=csrfmiddlewaretoken]')?.value || 
+                                             document.querySelector('input[name=csrfmiddlewaretoken]')?.value ||
+                                             document.cookie.match(/csrftoken=([^;]+)/)?.[1];
 
                             fetch('/admin/serverbot/stakeaccount/' + id + '/run-warmup/', {{
                                 method: 'POST',
-                                headers: {{'X-CSRFToken': csrftoken}}
+                                headers: {{
+                                    'X-CSRFToken': csrftoken,
+                                    'Content-Type': 'application/json'
+                                }}
                             }}).then(res => {{
                                 if (res.ok) {{
-                                    // 依然保留一个简单的成功提示，让你知道任务已经后台启动了
-                                    console.log('🚀 ' + name + ' 过盾任务已提交');
-                                    location.reload(); 
+                                    alert('🚀 ' + name + ' 过盾任务已提交，请观察控制台日志');
+                                    setTimeout(() => location.reload(), 1000);
+                                }} else {{
+                                    alert('❌ 操作失败，请重试');
                                 }}
+                            }}).catch(err => {{
+                                console.error('错误:', err);
+                                alert('❌ 请求失败: ' + err.message);
+                            }});
+                        }};
+                    }}
+                    
+                    if (typeof deleteCF === 'undefined') {{
+                        window.deleteCF = function(id, name) {{
+                            if (!confirm('确定要删除 ' + name + ' 的 CF Cookie 吗？\\n\\n这将清除 cookies_json 和 user_agent 数据。')) {{
+                                return;
+                            }}
+                            const csrftoken = document.querySelector('[name=csrfmiddlewaretoken]')?.value || 
+                                             document.querySelector('input[name=csrfmiddlewaretoken]')?.value ||
+                                             document.cookie.match(/csrftoken=([^;]+)/)?.[1];
+
+                            fetch('/admin/serverbot/stakeaccount/' + id + '/delete-cf/', {{
+                                method: 'POST',
+                                headers: {{
+                                    'X-CSRFToken': csrftoken,
+                                    'Content-Type': 'application/json'
+                                }}
+                            }}).then(res => {{
+                                if (res.ok) {{
+                                    alert('✅ ' + name + ' 的 CF Cookie 已删除');
+                                    location.reload();
+                                }} else {{
+                                    alert('❌ 操作失败，请重试');
+                                }}
+                            }}).catch(err => {{
+                                console.error('错误:', err);
+                                alert('❌ 请求失败: ' + err.message);
                             }});
                         }};
                     }}
@@ -153,18 +200,48 @@ class StakeAccountAdmin(admin.ModelAdmin):
             path(
                 '<int:account_id>/run-warmup/',
                 self.admin_site.admin_view(self.run_warmup_view),
-                name='manager-account-warmup',
+                name='stake-account-warmup',
+            ),
+            path(
+                '<int:account_id>/delete-cf/',
+                self.admin_site.admin_view(self.delete_cf_view),
+                name='stake-account-delete-cf',
             ),
         ]
         return custom_urls + urls
 
-    # 4. 按钮点击后的处理逻辑
+    # 4. 强制更新 CF 的处理逻辑
     def run_warmup_view(self, request, account_id):
+        if request.method != 'POST':
+            messages.error(request, "无效的请求方法")
+            return redirect('/admin/serverbot/stakeaccount/')
+        
         account = self.get_object(request, account_id)
         if account:
-            # 开启后台线程，执行 pre.py 的原始逻辑
+            # 开启后台线程，执行过盾逻辑
             threading.Thread(target=run_pre_logic, args=(account,), daemon=True).start()
-            self.message_user(request, f"🚀 账号 {account.username} 的过盾任务已启动，请观察控制台日志。")
+            messages.success(request, f"🚀 账号 {account.username} 的过盾任务已启动，请观察控制台日志。")
+        else:
+            messages.error(request, "账号不存在")
+        return redirect('/admin/serverbot/stakeaccount/')
+    
+    # 5. 删除 CF 的处理逻辑
+    def delete_cf_view(self, request, account_id):
+        if request.method != 'POST':
+            messages.error(request, "无效的请求方法")
+            return redirect('/admin/serverbot/stakeaccount/')
+        
+        account = self.get_object(request, account_id)
+        if account:
+            # 清除 cookies_json 和 user_agent
+            account.cookies_json = None
+            account.user_agent = None
+            account.bypass_trigger_time = None
+            account.bypass_success_time = None
+            account.save()
+            messages.success(request, f"✅ 账号 {account.username} 的 CF Cookie 已删除。")
+        else:
+            messages.error(request, "账号不存在")
         return redirect('/admin/serverbot/stakeaccount/')
 
 
