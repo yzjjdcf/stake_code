@@ -98,24 +98,36 @@ client = TelegramClient(
 # ================= 6. 监听事件处理 =================
 @client.on(events.NewMessage(chats=TELEGRAM_TARGET_CHANNEL))
 async def my_event_handler(event):
-    raw_text = event.raw_text.strip()
-    if not raw_text:
-        return
-
-    # 直接截取前 10 个字符
-    code = raw_text[:10]
-
-    logger.info(f"📩 收到消息，原始内容: {raw_text[:50]}...")
-    logger.info(f"📝 截取前10位代码: {code}")
-    logger.info(f"🚀 正在开启新线程执行同步请求任务...")
-
     try:
+        # 记录收到消息的详细信息
+        logger.info("=" * 50)
+        logger.info("📩 收到新消息！")
+        logger.info(f"   消息 ID: {event.id}")
+        logger.info(f"   发送者 ID: {event.sender_id}")
+        logger.info(f"   聊天 ID: {event.chat_id}")
+        logger.info(f"   原始文本长度: {len(event.raw_text) if event.raw_text else 0}")
+        
+        raw_text = event.raw_text.strip() if event.raw_text else ""
+        if not raw_text:
+            logger.info("   消息为空，跳过处理")
+            logger.info("=" * 50)
+            return
+
+        # 直接截取前 20 个字符
+        code = raw_text[:20]
+
+        logger.info(f"   原始内容: {raw_text[:100]}...")
+        logger.info(f"   截取前10位代码: {code}")
+        logger.info(f"🚀 正在开启新线程执行同步请求任务...")
+
         # --- 修复核心：使用 asyncio.to_thread 运行同步函数 ---
         # 这样就不会触发 SynchronousOnlyOperation 错误
         await asyncio.to_thread(redeem_bonus_task, code)
         logger.info(f"✅ 任务线程已结束: {code}")
+        logger.info("=" * 50)
     except Exception as e:
-        logger.error(f"❌ 处理代码失败 {code}: {e}", exc_info=True)
+        logger.error(f"❌ 处理代码失败: {e}", exc_info=True)
+        logger.error("=" * 50)
 
 # ================= 7. 启动 =================
 async def main():
@@ -125,6 +137,20 @@ async def main():
         await client.start()
         logger.info("✅ Telegram 客户端已连接")
         logger.info(f"📡 监听频道: {TELEGRAM_TARGET_CHANNEL}")
+        
+        # 验证频道是否存在
+        try:
+            entity = await client.get_entity(TELEGRAM_TARGET_CHANNEL)
+            channel_title = entity.title if hasattr(entity, 'title') else 'N/A'
+            channel_id = entity.id if hasattr(entity, 'id') else 'N/A'
+            logger.info(f"✅ 频道验证成功: {channel_title} (ID: {channel_id})")
+        except Exception as e:
+            logger.warning(f"⚠️ 频道验证失败: {e}")
+            logger.warning(f"   请确认频道名称或 ID 是否正确: {TELEGRAM_TARGET_CHANNEL}")
+            logger.warning(f"   提示：可以使用频道用户名（如 @channel_name）或频道 ID（如 -1001234567890）")
+        
+        logger.info("🎧 开始监听消息...")
+        logger.info("   等待新消息中...")
         await client.run_until_disconnected()
     except ConnectionError as e:
         logger.error(f"❌ 连接失败: {e}")

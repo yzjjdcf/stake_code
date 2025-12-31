@@ -2,6 +2,7 @@ import os
 import random
 import sys
 import json
+import logging
 # 使用 curl_cffi 解决 10054 错误
 from curl_cffi import requests as curl_requests
 import django
@@ -17,6 +18,25 @@ if project_root not in sys.path:
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'manager.settings')
 django.setup()
+
+# 配置日志（与 listener.py 保持一致）
+log_dir = os.path.join(project_root, 'db', 'logs')
+os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, 'listener.log')  # 使用同一个日志文件
+
+# 配置 logging（如果还没有配置过）
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format='[%(asctime)s] %(levelname)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
+        handlers=[
+            logging.FileHandler(log_file, encoding='utf-8'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+
+logger = logging.getLogger(__name__)
 
 # 导入配置
 import sys
@@ -50,7 +70,7 @@ def request_single_account(account, target_code):
 
     # --- 第一步：代理检测与分配 ---
     if not account.proxy:
-        print(f"[*] 账号 {account.username} 缺失代理，正在分配...")
+        logger.info(f"[*] 账号 {account.username} 缺失代理，正在分配...")
         proxy = ProxyPool.objects.filter(is_active=True, stakeaccount__isnull=True).first()
         if not proxy:
             proxy = ProxyPool.objects.filter(is_active=True).order_by('?').first()
@@ -60,7 +80,7 @@ def request_single_account(account, target_code):
             account.proxy = proxy
             needs_warmup = True
         else:
-            print(f"❌ {account.username}: 代理池空，跳过")
+            logger.warning(f"❌ {account.username}: 代理池空，跳过")
             return
 
     # --- 【新增逻辑】：确保打印前拿到归属地 ---
@@ -76,7 +96,7 @@ def request_single_account(account, target_code):
 
     # --- 第三步：异步触发过盾 ---
     if needs_warmup:
-        print(f"🚀 {account.username} ({account.proxy.location}): 触发初始化过盾...")
+        logger.info(f"🚀 {account.username} ({account.proxy.location}): 触发初始化过盾...")
         threading.Thread(target=run_pre_logic, args=(account,), daemon=True).start()
         return
 
@@ -160,12 +180,12 @@ def handle_response_result(response, account, log_port, location, elapsed_ms, la
     error_msg = None
     
     if not response:
-        print(f"⚠️ {account.username} ({log_port} - {location}) 彻底异常: {last_error[:40]} | 耗时 {elapsed_ms}ms")
+        logger.warning(f"⚠️ {account.username} ({log_port} - {location}) 彻底异常: {last_error[:40]} | 耗时 {elapsed_ms}ms")
         claim_status = 'error'
         error_msg = last_error[:200] if last_error else "无响应"
     elif response.status_code == 403:
         # 情况 A: 403 盾拦截
-        print(f"🛑 {account.username} ({log_port} - {location}): 403 拦截 | 耗时 {elapsed_ms}ms")
+        logger.warning(f"🛑 {account.username} ({log_port} - {location}): 403 拦截 | 耗时 {elapsed_ms}ms")
         claim_status = 'error_403'
         StakeAccount.objects.filter(pk=account.pk).update(cookies_json=None)
         threading.Thread(target=run_pre_logic, args=(account,), daemon=True).start()
@@ -176,56 +196,67 @@ def handle_response_result(response, account, log_port, location, elapsed_ms, la
 
             # 1. 先看有没有报错 (Errors 字段)
             errors = res_json.get('errors', [])
+            data_root = res_json.get('data')
+            
             if errors:
-                err_msg = errors[0].get('message', '')
-                if "Bonus code cannot be found" in err_msg:
-                    print(f"❌ {account.username} ({log_port} - {location}): 找不到代码 | 耗时 {elapsed_ms}ms")
+                # 有错误信息，检查是否是无效码
+                error_info = errors[0]
+                err_msg = error_info.get('message', '')
+                error_type = error_info.get('errorType', '')
+                
+                # 检查是否是无效码（未找到或不可用）
+                if (error_type == 'notFound' or 
+                    "未找到或不可用" in err_msg or 
+                    "Bonus code cannot be found" in err_msg or
+                    "not found" in err_msg.lower()):
+                    logger.warning(f"❌ {account.username} ({log_port} - {location}): 无效码（未找到或不可用）| 耗时 {elapsed_ms}ms")
                     claim_status = 'not_found'
                     error_msg = err_msg
                 else:
-                    print(f"❓ {account.username} ({log_port} - {location}): 接口报错: {err_msg} | 耗时 {elapsed_ms}ms")
+                    logger.warning(f"❓ {account.username} ({log_port} - {location}): 接口报错: {err_msg} | 耗时 {elapsed_ms}ms")
                     claim_status = 'error'
                     error_msg = err_msg
+            elif data_root is None:
+                # data 为 null，且没有 errors（这种情况应该不会发生，但为了安全）
+                logger.warning(f"❌ {account.username} ({log_port} - {location}): 返回 Data 为 null | 耗时 {elapsed_ms}ms")
+                claim_status = 'not_found'
+                error_msg = "返回 Data 为 null"
             else:
-                # 2. 解析 Data 字段
-                data_root = res_json.get('data', {})
-                if not data_root:
-                    print(f"❌ {account.username} ({log_port} - {location}): 返回 Data 为空 | 耗时 {elapsed_ms}ms")
+                # 2. 解析 Data 字段（data 不为 null）
+                info = data_root.get('bonusCodeInformation')
+                if info is None:
+                    logger.warning(f"❌ {account.username} ({log_port} - {location}): 无效代码结构 | 耗时 {elapsed_ms}ms")
                     claim_status = 'error'
-                    error_msg = "返回 Data 为空"
+                    error_msg = "无效代码结构"
                 else:
-                    info = data_root.get('bonusCodeInformation')
-                    if info is None:
-                        print(f"❌ {account.username} ({log_port} - {location}): 无效代码结构 | 耗时 {elapsed_ms}ms")
-                        claim_status = 'error'
-                        error_msg = "无效代码结构"
-                    else:
-                        status = info.get('availabilityStatus')
-                        bonus_value = info.get('bonusValue')  # 获取奖金金额
+                    status = info.get('availabilityStatus')
+                    bonus_value = info.get('bonusValue')  # 获取奖金金额
 
-                        # 3. 根据 Stake 状态码分支判定
-                        if status == 'bonusCodeInactive':
-                            print(f"⌛ {account.username} ({log_port} - {location}): 奖金限额已满 (Inactive) | 耗时 {elapsed_ms}ms")
-                            claim_status = 'inactive'
-                        elif status == 'available':
-                            print(f"💰 {account.username} ({log_port} - {location}): 代码有效(Available)！ | 耗时 {elapsed_ms}ms")
-                            claim_status = 'success'
-                            # 如果代码有效且有金额，会在 handle_response_result 中更新 CodeRecord
-                        elif status == 'alreadyClaimed':
-                            print(f"🔁 {account.username} ({log_port} - {location}): 该代码已领过 | 耗时 {elapsed_ms}ms")
-                            claim_status = 'already_claimed'
-                        else:
-                            print(f"✅ {account.username} ({log_port} - {location}): [200 OK] 状态: {status} | 耗时 {elapsed_ms}ms")
-                            claim_status = 'error'
-                            error_msg = f"未知状态: {status}"
+                    # 3. 根据 Stake 状态码分支判定
+                    if status == 'bonusCodeInactive':
+                        # 码有效，但次数已用尽
+                        logger.info(f"⌛ {account.username} ({log_port} - {location}): 码有效但次数已用尽 (Inactive) | 耗时 {elapsed_ms}ms")
+                        claim_status = 'inactive'
+                    elif status == 'available':
+                        # 码有效且可用
+                        logger.info(f"💰 {account.username} ({log_port} - {location}): 代码有效且可用 (Available)！ | 耗时 {elapsed_ms}ms")
+                        claim_status = 'success'
+                        # 如果代码有效且有金额，会在 handle_response_result 中更新 CodeRecord
+                    elif status == 'alreadyClaimed':
+                        logger.info(f"🔁 {account.username} ({log_port} - {location}): 该代码已领过 | 耗时 {elapsed_ms}ms")
+                        claim_status = 'already_claimed'
+                    else:
+                        logger.info(f"✅ {account.username} ({log_port} - {location}): [200 OK] 状态: {status} | 耗时 {elapsed_ms}ms")
+                        claim_status = 'error'
+                        error_msg = f"未知状态: {status}"
 
         except Exception as e:
-            print(f"⚠️ {account.username} ({log_port} - {location}): 解析 JSON 失败: {e} | 耗时 {elapsed_ms}ms")
+            logger.error(f"⚠️ {account.username} ({log_port} - {location}): 解析 JSON 失败: {e} | 耗时 {elapsed_ms}ms")
             claim_status = 'error'
             error_msg = str(e)[:200]
     else:
         # 情况 C: 其他 HTTP 状态码 (500, 502 等)
-        print(f"❌ {account.username} ({log_port} - {location}): 错误状态 {response.status_code} | 耗时 {elapsed_ms}ms")
+        logger.warning(f"❌ {account.username} ({log_port} - {location}): 错误状态 {response.status_code} | 耗时 {elapsed_ms}ms")
         claim_status = 'error'
         error_msg = f"HTTP {response.status_code}"
     
@@ -271,7 +302,7 @@ def handle_response_result(response, account, log_port, location, elapsed_ms, la
         if update_fields:
             CodeRecord.objects.filter(pk=code_record.pk).update(**update_fields)
     except Exception as e:
-        print(f"⚠️ 记录数据库失败: {e}")
+        logger.error(f"⚠️ 记录数据库失败: {e}")
 
 def redeem_bonus_task(target_code):
     """
@@ -280,13 +311,13 @@ def redeem_bonus_task(target_code):
     """
     accounts = StakeAccount.objects.filter(is_active=True)
     if not accounts.exists():
-        print("⚠️ 没有激活的账号")
+        logger.warning("⚠️ 没有激活的账号")
         return
 
     unique_ports = accounts.exclude(proxy__isnull=True).values('proxy_id').distinct().count()
     max_workers = max(unique_ports, 10)
 
-    print(f"🔥 开始抢码任务: {target_code} | 并发线程: {len(accounts)}")
+    logger.info(f"🔥 开始抢码任务: {target_code} | 并发线程: {len(accounts)}")
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         for account in accounts:

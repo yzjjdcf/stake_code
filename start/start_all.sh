@@ -40,14 +40,52 @@ start_django() {
     fi
     
     echo "🚀 启动 Django 服务..."
+    
+    # 检查 manage.py 是否存在
+    if [ ! -f "$PROJECT_DIR/config/manage.py" ]; then
+        echo "   ❌ 错误: manage.py 不存在: $PROJECT_DIR/config/manage.py"
+        return 1
+    fi
+    
+    # 检查 Python 是否可用
+    if [ ! -f "$PYTHON" ]; then
+        echo "   ❌ 错误: Python 不存在: $PYTHON"
+        return 1
+    fi
+    
     cd "$PROJECT_DIR/config" || exit 1
     nohup "$PYTHON" manage.py runserver 0.0.0.0:8000 > "$DJANGO_LOG" 2>&1 &
     DJANGO_PID_VALUE=$!
     cd "$PROJECT_DIR" || exit 1
-    echo $DJANGO_PID_VALUE > "$DJANGO_PID"
-    echo "   ✅ Django 已启动 (PID: $DJANGO_PID_VALUE)"
-    echo "   📋 日志: $DJANGO_LOG"
-    return 0
+    
+    # 等待一下，检查进程是否真的启动了
+    sleep 3
+    if kill -0 "$DJANGO_PID_VALUE" 2>/dev/null; then
+        echo $DJANGO_PID_VALUE > "$DJANGO_PID"
+        echo "   ✅ Django 已启动 (PID: $DJANGO_PID_VALUE)"
+        echo "   📋 日志: $DJANGO_LOG"
+        return 0
+    else
+        echo "   ❌ Django 启动失败，进程已退出"
+        echo ""
+        echo "   📋 错误日志（最后 30 行）："
+        echo "   ----------------------------------------"
+        if [ -f "$DJANGO_LOG" ]; then
+            tail -n 30 "$DJANGO_LOG" | sed 's/^/   /'
+        else
+            echo "   ⚠️  日志文件不存在"
+        fi
+        echo "   ----------------------------------------"
+        echo ""
+        echo "   💡 常见问题排查："
+        echo "      1. 检查端口是否被占用: lsof -i:8000"
+        echo "      2. 检查数据库文件: ls -la $PROJECT_DIR/db/db.sqlite3"
+        echo "      3. 检查配置文件: ls -la $PROJECT_DIR/config/config.py"
+        echo "      4. 检查虚拟环境: $PYTHON --version"
+        echo "      5. 手动测试: cd $PROJECT_DIR/config && $PYTHON manage.py runserver 0.0.0.0:8000"
+        rm -f "$DJANGO_PID"
+        return 1
+    fi
 }
 
 # 函数：启动 Listener
@@ -58,14 +96,51 @@ start_listener() {
     fi
     
     echo "🚀 启动 Telegram Listener 服务..."
+    
+    # 检查 listener.py 是否存在
+    if [ ! -f "$PROJECT_DIR/core/listener.py" ]; then
+        echo "   ❌ 错误: listener.py 不存在: $PROJECT_DIR/core/listener.py"
+        return 1
+    fi
+    
+    # 检查 Python 是否可用
+    if [ ! -f "$PYTHON" ]; then
+        echo "   ❌ 错误: Python 不存在: $PYTHON"
+        return 1
+    fi
+    
     cd "$PROJECT_DIR/core" || exit 1
     nohup "$PYTHON" listener.py > "$LISTENER_LOG" 2>&1 &
     LISTENER_PID_VALUE=$!
     cd "$PROJECT_DIR" || exit 1
-    echo $LISTENER_PID_VALUE > "$LISTENER_PID"
-    echo "   ✅ Listener 已启动 (PID: $LISTENER_PID_VALUE)"
-    echo "   📋 日志: $LISTENER_LOG"
-    return 0
+    
+    # 等待一下，检查进程是否真的启动了
+    sleep 3
+    if kill -0 "$LISTENER_PID_VALUE" 2>/dev/null; then
+        echo $LISTENER_PID_VALUE > "$LISTENER_PID"
+        echo "   ✅ Listener 已启动 (PID: $LISTENER_PID_VALUE)"
+        echo "   📋 日志: $LISTENER_LOG"
+        return 0
+    else
+        echo "   ❌ Listener 启动失败，进程已退出"
+        echo ""
+        echo "   📋 错误日志（最后 30 行）："
+        echo "   ----------------------------------------"
+        if [ -f "$LISTENER_LOG" ]; then
+            tail -n 30 "$LISTENER_LOG" | sed 's/^/   /'
+        else
+            echo "   ⚠️  日志文件不存在"
+        fi
+        echo "   ----------------------------------------"
+        echo ""
+        echo "   💡 常见问题排查："
+        echo "      1. 检查配置文件: ls -la $PROJECT_DIR/config/config.py"
+        echo "      2. 检查 Telegram 配置是否正确"
+        echo "      3. 检查虚拟环境: $PYTHON --version"
+        echo "      4. 手动测试: cd $PROJECT_DIR/core && $PYTHON listener.py"
+        rm -f "$LISTENER_PID"
+        return 1
+    fi
 }
 
 # 函数：停止 Django

@@ -39,7 +39,7 @@ show_menu() {
 # 启动所有服务
 start_services() {
     echo -e "${GREEN}🚀 启动所有服务...${NC}"
-    ./start_all.sh start
+    bash "$PROJECT_DIR/start/start_all.sh" start
     echo ""
     read -p "按回车键继续..."
 }
@@ -47,7 +47,7 @@ start_services() {
 # 停止所有服务
 stop_services() {
     echo -e "${RED}🛑 停止所有服务...${NC}"
-    ./start_all.sh stop
+    bash "$PROJECT_DIR/start/start_all.sh" stop
     echo ""
     read -p "按回车键继续..."
 }
@@ -55,7 +55,7 @@ stop_services() {
 # 重启所有服务
 restart_services() {
     echo -e "${YELLOW}🔄 重启所有服务...${NC}"
-    ./start_all.sh restart
+    bash "$PROJECT_DIR/start/start_all.sh" restart
     echo ""
     read -p "按回车键继续..."
 }
@@ -63,7 +63,7 @@ restart_services() {
 # 查看服务状态
 show_status() {
     echo -e "${BLUE}📊 服务状态：${NC}"
-    ./start_all.sh status
+    bash "$PROJECT_DIR/start/start_all.sh" status
     echo ""
     read -p "按回车键继续..."
 }
@@ -72,10 +72,11 @@ show_status() {
 view_django_log() {
     echo -e "${YELLOW}📋 查看 Django 日志 (Ctrl+C 退出)...${NC}"
     echo ""
-    if [ -f "db/logs/django.log" ]; then
-        tail -f db/logs/django.log
+    DJANGO_LOG="$PROJECT_DIR/db/logs/django.log"
+    if [ -f "$DJANGO_LOG" ]; then
+        tail -f "$DJANGO_LOG"
     else
-        echo -e "${RED}⚠️  日志文件不存在${NC}"
+        echo -e "${RED}⚠️  日志文件不存在: $DJANGO_LOG${NC}"
         read -p "按回车键继续..."
     fi
 }
@@ -84,10 +85,11 @@ view_django_log() {
 view_listener_log() {
     echo -e "${YELLOW}📋 查看 Listener 日志 (Ctrl+C 退出)...${NC}"
     echo ""
-    if [ -f "db/logs/listener.log" ]; then
-        tail -f db/logs/listener.log
+    LISTENER_LOG="$PROJECT_DIR/db/logs/listener.log"
+    if [ -f "$LISTENER_LOG" ]; then
+        tail -f "$LISTENER_LOG"
     else
-        echo -e "${RED}⚠️  日志文件不存在${NC}"
+        echo -e "${RED}⚠️  日志文件不存在: $LISTENER_LOG${NC}"
         read -p "按回车键继续..."
     fi
 }
@@ -96,10 +98,11 @@ view_listener_log() {
 view_bypass_log() {
     echo -e "${YELLOW}📋 查看过盾日志 (Ctrl+C 退出)...${NC}"
     echo ""
-    if [ -f "db/logs/bypass.log" ]; then
-        tail -f db/logs/bypass.log
+    BYPASS_LOG="$PROJECT_DIR/db/logs/bypass.log"
+    if [ -f "$BYPASS_LOG" ]; then
+        tail -f "$BYPASS_LOG"
     else
-        echo -e "${RED}⚠️  日志文件不存在${NC}"
+        echo -e "${RED}⚠️  日志文件不存在: $BYPASS_LOG${NC}"
         read -p "按回车键继续..."
     fi
 }
@@ -108,8 +111,9 @@ view_bypass_log() {
 view_all_logs() {
     echo -e "${YELLOW}📋 同时查看所有日志 (Ctrl+C 退出)...${NC}"
     echo ""
-    if [ -f "db/logs/django.log" ] || [ -f "db/logs/listener.log" ] || [ -f "db/logs/bypass.log" ]; then
-        tail -f db/logs/*.log 2>/dev/null
+    LOG_DIR="$PROJECT_DIR/db/logs"
+    if [ -f "$LOG_DIR/django.log" ] || [ -f "$LOG_DIR/listener.log" ] || [ -f "$LOG_DIR/bypass.log" ]; then
+        tail -f "$LOG_DIR"/*.log 2>/dev/null
     else
         echo -e "${RED}⚠️  日志文件不存在${NC}"
         read -p "按回车键继续..."
@@ -119,12 +123,13 @@ view_all_logs() {
 # 运行数据库迁移
 run_migration() {
     echo -e "${BLUE}🗄️  运行数据库迁移...${NC}"
-    if [ -f "venv/bin/activate" ]; then
-        source venv/bin/activate
+    VENV_ACTIVATE="$PROJECT_DIR/venv/bin/activate"
+    if [ -f "$VENV_ACTIVATE" ]; then
+        source "$VENV_ACTIVATE"
     fi
-    cd config || exit 1
+    cd "$PROJECT_DIR/config" || exit 1
     python manage.py migrate
-    cd ..
+    cd "$PROJECT_DIR" || exit 1
     echo ""
     read -p "按回车键继续..."
 }
@@ -132,8 +137,8 @@ run_migration() {
 # 检查 Listener 状态
 check_listener() {
     echo -e "${BLUE}🔍 检查 Listener 状态...${NC}"
-    if [ -f "start/检查listener状态.sh" ]; then
-        ./start/检查listener状态.sh
+    if [ -f "$PROJECT_DIR/start/检查listener状态.sh" ]; then
+        bash "$PROJECT_DIR/start/检查listener状态.sh"
     else
         echo -e "${RED}⚠️  检查脚本不存在${NC}"
     fi

@@ -5,12 +5,14 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root/stake_code
+WorkingDirectory=/root/stake_code/config
 Environment="PATH=/root/stake_code/venv/bin"
 Environment="STAKE_PLATFORM=linux"
-ExecStart=/root/stake_code/venv/bin/python manage.py runserver 0.0.0.0:8000
+ExecStart=/root/stake_code/venv/bin/python /root/stake_code/config/manage.py runserver 0.0.0.0:8000
 Restart=always
 RestartSec=10
+StandardOutput=append:/root/stake_code/db/logs/django.log
+StandardError=append:/root/stake_code/db/logs/django.log
 
 [Install]
 WantedBy=multi-user.target

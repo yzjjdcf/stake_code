@@ -60,7 +60,7 @@ fi
 
 echo ""
 echo "💡 启动 Listener："
-echo "   ./start_all.sh start"
+echo "   bash $PROJECT_DIR/start/start_all.sh start"
 echo ""
 echo "💡 查看实时日志："
 echo "   tail -f $LISTENER_LOG"

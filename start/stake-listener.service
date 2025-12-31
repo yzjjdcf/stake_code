@@ -5,12 +5,14 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root/stake_code
+WorkingDirectory=/root/stake_code/core
 Environment="PATH=/root/stake_code/venv/bin"
 Environment="STAKE_PLATFORM=linux"
-ExecStart=/root/stake_code/venv/bin/python listener.py
+ExecStart=/root/stake_code/venv/bin/python /root/stake_code/core/listener.py
 Restart=always
 RestartSec=10
+StandardOutput=append:/root/stake_code/db/logs/listener.log
+StandardError=append:/root/stake_code/db/logs/listener.log
 
 [Install]
 WantedBy=multi-user.target
