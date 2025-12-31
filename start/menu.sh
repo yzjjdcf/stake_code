@@ -72,8 +72,8 @@ show_status() {
 view_django_log() {
     echo -e "${YELLOW}📋 查看 Django 日志 (Ctrl+C 退出)...${NC}"
     echo ""
-    if [ -f "logs/django.log" ]; then
-        tail -f logs/django.log
+    if [ -f "db/logs/django.log" ]; then
+        tail -f db/logs/django.log
     else
         echo -e "${RED}⚠️  日志文件不存在${NC}"
         read -p "按回车键继续..."
@@ -84,8 +84,8 @@ view_django_log() {
 view_listener_log() {
     echo -e "${YELLOW}📋 查看 Listener 日志 (Ctrl+C 退出)...${NC}"
     echo ""
-    if [ -f "logs/listener.log" ]; then
-        tail -f logs/listener.log
+    if [ -f "db/logs/listener.log" ]; then
+        tail -f db/logs/listener.log
     else
         echo -e "${RED}⚠️  日志文件不存在${NC}"
         read -p "按回车键继续..."
@@ -96,8 +96,8 @@ view_listener_log() {
 view_bypass_log() {
     echo -e "${YELLOW}📋 查看过盾日志 (Ctrl+C 退出)...${NC}"
     echo ""
-    if [ -f "logs/bypass.log" ]; then
-        tail -f logs/bypass.log
+    if [ -f "db/logs/bypass.log" ]; then
+        tail -f db/logs/bypass.log
     else
         echo -e "${RED}⚠️  日志文件不存在${NC}"
         read -p "按回车键继续..."
@@ -108,8 +108,8 @@ view_bypass_log() {
 view_all_logs() {
     echo -e "${YELLOW}📋 同时查看所有日志 (Ctrl+C 退出)...${NC}"
     echo ""
-    if [ -f "logs/django.log" ] || [ -f "logs/listener.log" ] || [ -f "logs/bypass.log" ]; then
-        tail -f logs/*.log 2>/dev/null
+    if [ -f "db/logs/django.log" ] || [ -f "db/logs/listener.log" ] || [ -f "db/logs/bypass.log" ]; then
+        tail -f db/logs/*.log 2>/dev/null
     else
         echo -e "${RED}⚠️  日志文件不存在${NC}"
         read -p "按回车键继续..."
@@ -122,7 +122,9 @@ run_migration() {
     if [ -f "venv/bin/activate" ]; then
         source venv/bin/activate
     fi
+    cd config || exit 1
     python manage.py migrate
+    cd ..
     echo ""
     read -p "按回车键继续..."
 }
@@ -130,8 +132,8 @@ run_migration() {
 # 检查 Listener 状态
 check_listener() {
     echo -e "${BLUE}🔍 检查 Listener 状态...${NC}"
-    if [ -f "检查listener状态.sh" ]; then
-        ./检查listener状态.sh
+    if [ -f "start/检查listener状态.sh" ]; then
+        ./start/检查listener状态.sh
     else
         echo -e "${RED}⚠️  检查脚本不存在${NC}"
     fi

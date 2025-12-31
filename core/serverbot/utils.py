@@ -13,38 +13,34 @@ from .models import StakeAccount, ProxyPool
 
 # 导入配置
 import sys
+import importlib.util
 current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(current_dir)  # 项目根目录（包含config.py）
+core_dir = os.path.dirname(current_dir)  # core/ 目录
+project_root = os.path.dirname(core_dir)  # 项目根目录（包含 config/ 目录）
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-try:
-    import config
-except ImportError:
-    # 如果导入失败，尝试使用绝对路径
-    import importlib.util
-    config_path = os.path.join(project_root, 'config.py')
-    if os.path.exists(config_path):
-        spec = importlib.util.spec_from_file_location("config", config_path)
-        config = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(config)
-    else:
-        raise ImportError(f"无法找到配置文件: {config_path}")
-
-from config import (
-    PROXY_EXT_DIR,
-    PROFILES_DIR,
-    BROWSER_PATH,
-    BROWSER_HEADLESS,
-    BROWSER_PORT_START,
-    BROWSER_PORT_RANGE,
-    BYPASS_TIMEOUT,
-    IS_WINDOWS,
-    LOG_LEVEL
-)
+# 导入 config 模块
+config_path = os.path.join(project_root, 'config', 'config.py')
+if os.path.exists(config_path):
+    spec = importlib.util.spec_from_file_location("config_module", config_path)
+    config_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(config_module)
+    
+    PROXY_EXT_DIR = config_module.PROXY_EXT_DIR
+    PROFILES_DIR = config_module.PROFILES_DIR
+    BROWSER_PATH = config_module.BROWSER_PATH
+    BROWSER_HEADLESS = config_module.BROWSER_HEADLESS
+    BROWSER_PORT_START = config_module.BROWSER_PORT_START
+    BROWSER_PORT_RANGE = config_module.BROWSER_PORT_RANGE
+    BYPASS_TIMEOUT = config_module.BYPASS_TIMEOUT
+    IS_WINDOWS = config_module.IS_WINDOWS
+    LOG_LEVEL = config_module.LOG_LEVEL
+else:
+    raise ImportError(f"无法找到配置文件: {config_path}")
 
 # 配置过盾日志
-log_dir = os.path.join(project_root, 'logs')
+log_dir = os.path.join(project_root, 'db', 'logs')
 os.makedirs(log_dir, exist_ok=True)
 bypass_log_file = os.path.join(log_dir, 'bypass.log')
 

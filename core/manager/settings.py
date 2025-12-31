@@ -11,9 +11,11 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 from pathlib import Path
+import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent
+# BASE_DIR 是 core/manager/ 目录，需要向上两级到项目根目录
+BASE_DIR = Path(__file__).resolve().parent.parent.parent  # 项目根目录
 
 
 # Quick-start development settings - unsuitable for production
@@ -42,6 +44,9 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'serverbot'
 ]
+
+# 默认主键字段类型（Django 3.2+ 要求）
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -76,10 +81,17 @@ WSGI_APPLICATION = 'manager.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
+# 确保数据库目录存在
+db_dir = BASE_DIR / 'db'
+os.makedirs(db_dir, exist_ok=True)
+
+# 数据库路径（转换为字符串）
+db_path = str(BASE_DIR / 'db' / 'db.sqlite3')
+
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'NAME': db_path,  # 指向项目根目录/db/db.sqlite3
         'OPTIONS': {
             'timeout': 20,  # 允许线程排队等待 20 秒，直到锁释放
         },

@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 # 1. 环境初始化
 current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(current_dir)
+project_root = os.path.dirname(current_dir)  # 项目根目录（包含 config/ 目录）
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
@@ -19,7 +19,20 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'manager.settings')
 django.setup()
 
 # 导入配置
-from config import MAX_RETRIES, REQUEST_DELAY_MIN, REQUEST_DELAY_MAX
+import sys
+import importlib.util
+import os
+
+config_path = os.path.join(project_root, 'config', 'config.py')
+if os.path.exists(config_path):
+    spec = importlib.util.spec_from_file_location("config_module", config_path)
+    config_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(config_module)
+    MAX_RETRIES = config_module.MAX_RETRIES
+    REQUEST_DELAY_MIN = config_module.REQUEST_DELAY_MIN
+    REQUEST_DELAY_MAX = config_module.REQUEST_DELAY_MAX
+else:
+    raise ImportError(f"无法找到配置文件: {config_path}")
 
 from serverbot.models import StakeAccount, ProxyPool, CodeRecord, ClaimRecord
 from django.db.models import F
@@ -27,7 +40,7 @@ from django.db.models import F
 from serverbot.utils import run_pre_logic, fetch_ip_location
 
 
-def request_single_account(account, target_code, code_record=None):
+def request_single_account(account, target_code):
     """
     单个账号处理逻辑：
     - 代理分配并识别归属地
@@ -132,13 +145,12 @@ def request_single_account(account, target_code, code_record=None):
         location=location,
         elapsed_ms=elapsed_ms,
         last_error=last_error,
-        target_code=target_code,
-        code_record=code_record
+        target_code=target_code
     )
 
 
 # ================= 2. 结果解析方法 (深度逻辑) =================
-def handle_response_result(response, account, log_port, location, elapsed_ms, last_error, target_code, code_record):
+def handle_response_result(response, account, log_port, location, elapsed_ms, last_error, target_code):
     """
     深度解析 Stake GraphQL 返回的 JSON 数据
     并记录到数据库
@@ -198,12 +210,7 @@ def handle_response_result(response, account, log_port, location, elapsed_ms, la
                         elif status == 'available':
                             print(f"💰 {account.username} ({log_port} - {location}): 代码有效(Available)！ | 耗时 {elapsed_ms}ms")
                             claim_status = 'success'
-                            # 如果代码有效且有金额，更新CodeRecord
-                            if bonus_value and code_record:
-                                CodeRecord.objects.filter(pk=code_record.pk).update(
-                                    status='valid',
-                                    actual_value=str(bonus_value)
-                                )
+                            # 如果代码有效且有金额，会在 handle_response_result 中更新 CodeRecord
                         elif status == 'alreadyClaimed':
                             print(f"🔁 {account.username} ({log_port} - {location}): 该代码已领过 | 耗时 {elapsed_ms}ms")
                             claim_status = 'already_claimed'
@@ -222,8 +229,15 @@ def handle_response_result(response, account, log_port, location, elapsed_ms, la
         claim_status = 'error'
         error_msg = f"HTTP {response.status_code}"
     
-    # 记录到ClaimRecord
+    # 记录到ClaimRecord和CodeRecord
     try:
+        # 自动创建或获取CodeRecord（不检查是否已有，直接获取或创建）
+        code_record, _ = CodeRecord.objects.get_or_create(
+            code=target_code,
+            defaults={'status': 'unknown'}
+        )
+        
+        # 创建ClaimRecord
         ClaimRecord.objects.create(
             account=account,
             code_record=code_record,
@@ -235,50 +249,39 @@ def handle_response_result(response, account, log_port, location, elapsed_ms, la
         )
         
         # 更新CodeRecord统计信息
-        if code_record:
-            update_fields = {}
-            if claim_status == 'success':
-                update_fields['success_count'] = F('success_count') + 1
-                if bonus_value:
-                    update_fields['actual_value'] = str(bonus_value)
-                    update_fields['status'] = 'valid'
-            elif claim_status == 'error_403':
-                update_fields['error_403_count'] = F('error_403_count') + 1
-            elif claim_status in ['not_found', 'inactive', 'already_claimed', 'error']:
-                update_fields['failure_count'] = F('failure_count') + 1
-            
-            update_fields['total_attempts'] = F('total_attempts') + 1
-            
-            # 如果代码无效，更新状态
-            if claim_status == 'not_found' and code_record.status == 'unknown':
-                update_fields['status'] = 'invalid'
-            elif claim_status == 'inactive' and code_record.status == 'unknown':
-                update_fields['status'] = 'expired'
-            
-            if update_fields:
-                CodeRecord.objects.filter(pk=code_record.pk).update(**update_fields)
+        update_fields = {}
+        if claim_status == 'success':
+            update_fields['success_count'] = F('success_count') + 1
+            if bonus_value:
+                update_fields['actual_value'] = str(bonus_value)
+                update_fields['status'] = 'valid'
+        elif claim_status == 'error_403':
+            update_fields['error_403_count'] = F('error_403_count') + 1
+        elif claim_status in ['not_found', 'inactive', 'already_claimed', 'error']:
+            update_fields['failure_count'] = F('failure_count') + 1
+        
+        update_fields['total_attempts'] = F('total_attempts') + 1
+        
+        # 如果代码无效，更新状态
+        if claim_status == 'not_found' and code_record.status == 'unknown':
+            update_fields['status'] = 'invalid'
+        elif claim_status == 'inactive' and code_record.status == 'unknown':
+            update_fields['status'] = 'expired'
+        
+        if update_fields:
+            CodeRecord.objects.filter(pk=code_record.pk).update(**update_fields)
     except Exception as e:
         print(f"⚠️ 记录数据库失败: {e}")
 
 def redeem_bonus_task(target_code):
     """
     领取红包代码任务
-    创建或获取CodeRecord，然后并发处理所有账号
+    收到码直接执行请求，不检查是否有记录
     """
     accounts = StakeAccount.objects.filter(is_active=True)
     if not accounts.exists():
         print("⚠️ 没有激活的账号")
         return
-
-    # 创建或获取CodeRecord
-    code_record, created = CodeRecord.objects.get_or_create(
-        code=target_code,
-        defaults={'status': 'unknown'}
-    )
-    if created:
-        print(f"📝 创建新代码记录: {target_code}")
-    else:
-        print(f"📝 使用已有代码记录: {target_code} (状态: {code_record.get_status_display()})")
 
     unique_ports = accounts.exclude(proxy__isnull=True).values('proxy_id').distinct().count()
     max_workers = max(unique_ports, 10)
@@ -287,7 +290,7 @@ def redeem_bonus_task(target_code):
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         for account in accounts:
-            executor.submit(request_single_account, account, target_code, code_record)
+            executor.submit(request_single_account, account, target_code)
             # --- 【核心修复】：错峰请求 ---
             # 这样请求会变成排队发出，极大降低 56 错误
             time.sleep(random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX))

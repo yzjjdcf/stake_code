@@ -8,14 +8,14 @@ set -e
 PROJECT_DIR="/root/stake_code"
 VENV_DIR="$PROJECT_DIR/venv"
 PYTHON="$VENV_DIR/bin/python"
-DJANGO_LOG="$PROJECT_DIR/logs/django.log"
-LISTENER_LOG="$PROJECT_DIR/logs/listener.log"
+DJANGO_LOG="$PROJECT_DIR/db/logs/django.log"
+LISTENER_LOG="$PROJECT_DIR/db/logs/listener.log"
 PID_DIR="$PROJECT_DIR/pids"
 DJANGO_PID="$PID_DIR/django.pid"
 LISTENER_PID="$PID_DIR/listener.pid"
 
 # 创建必要的目录
-mkdir -p "$PROJECT_DIR/logs"
+mkdir -p "$PROJECT_DIR/db/logs"
 mkdir -p "$PID_DIR"
 
 # 进入项目目录
@@ -40,8 +40,10 @@ start_django() {
     fi
     
     echo "🚀 启动 Django 服务..."
+    cd "$PROJECT_DIR/config" || exit 1
     nohup "$PYTHON" manage.py runserver 0.0.0.0:8000 > "$DJANGO_LOG" 2>&1 &
     DJANGO_PID_VALUE=$!
+    cd "$PROJECT_DIR" || exit 1
     echo $DJANGO_PID_VALUE > "$DJANGO_PID"
     echo "   ✅ Django 已启动 (PID: $DJANGO_PID_VALUE)"
     echo "   📋 日志: $DJANGO_LOG"
@@ -56,8 +58,10 @@ start_listener() {
     fi
     
     echo "🚀 启动 Telegram Listener 服务..."
+    cd "$PROJECT_DIR/core" || exit 1
     nohup "$PYTHON" listener.py > "$LISTENER_LOG" 2>&1 &
     LISTENER_PID_VALUE=$!
+    cd "$PROJECT_DIR" || exit 1
     echo $LISTENER_PID_VALUE > "$LISTENER_PID"
     echo "   ✅ Listener 已启动 (PID: $LISTENER_PID_VALUE)"
     echo "   📋 日志: $LISTENER_LOG"
@@ -141,6 +145,7 @@ show_status() {
     echo "📋 查看日志："
     echo "   Django:   tail -f $DJANGO_LOG"
     echo "   Listener: tail -f $LISTENER_LOG"
+    echo "   Bypass:   tail -f $PROJECT_DIR/db/logs/bypass.log"
 }
 
 # 主逻辑

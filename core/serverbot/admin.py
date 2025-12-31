@@ -245,6 +245,39 @@ class StakeAccountAdmin(admin.ModelAdmin):
         return redirect('/admin/serverbot/stakeaccount/')
 
 
+# 内联显示 ClaimRecord
+class ClaimRecordInline(admin.TabularInline):
+    """在 CodeRecord 详情页内联显示所有操作记录"""
+    model = ClaimRecord
+    extra = 0
+    readonly_fields = ('account', 'code', 'get_status_display_colored', 'bonus_value', 'response_time_ms', 'error_message', 'created_at')
+    fields = ('account', 'get_status_display_colored', 'bonus_value', 'response_time_ms', 'error_message', 'created_at')
+    can_delete = False
+    show_change_link = True
+    ordering = ['-created_at']  # 按时间倒序显示
+    
+    def get_status_display_colored(self, obj):
+        """带颜色的状态显示"""
+        colors = {
+            'success': '#28a745',
+            'failure': '#dc3545',
+            'error_403': '#ffc107',
+            'not_found': '#6c757d',
+            'inactive': '#17a2b8',
+            'already_claimed': '#6f42c1',
+            'error': '#e83e8c',
+        }
+        status_display = obj.get_status_display()
+        color = colors.get(obj.status, '#000')
+        return mark_safe(
+            f'<span style="color: {color}; font-weight: bold;">{status_display}</span>'
+        )
+    get_status_display_colored.short_description = '状态'
+    
+    def has_add_permission(self, request, obj=None):
+        return False  # 不允许在详情页添加新记录
+
+
 @admin.register(CodeRecord)
 class CodeRecordAdmin(admin.ModelAdmin):
     list_display = (
@@ -260,12 +293,19 @@ class CodeRecordAdmin(admin.ModelAdmin):
     search_fields = ('code',)
     readonly_fields = ('total_attempts', 'success_count', 'failure_count', 'error_403_count', 'created_at', 'updated_at')
     
+    # 添加内联显示
+    inlines = [ClaimRecordInline]
+    
     fieldsets = (
         ('基本信息', {
             'fields': ('code', 'status', 'actual_value', 'is_timeout_trigger')
         }),
         ('统计信息', {
             'fields': ('total_attempts', 'success_count', 'failure_count', 'error_403_count')
+        }),
+        ('操作历史', {
+            'description': '下方显示所有账号的操作记录',
+            'fields': ()  # 通过内联显示 ClaimRecord
         }),
         ('时间信息', {
             'fields': ('created_at', 'updated_at')

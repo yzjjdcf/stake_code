@@ -3,6 +3,16 @@
 import os
 import sys
 
+# 添加项目根目录和 core 目录到 Python 路径
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+core_dir = os.path.join(project_root, 'core')
+
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+if core_dir not in sys.path:
+    sys.path.insert(0, core_dir)
+
 
 def main():
     """Run administrative tasks."""

@@ -12,12 +12,14 @@ IS_LINUX = PLATFORM in ('linux', 'linux2')
 # 项目根目录
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# 数据目录（代理扩展、浏览器配置等）
-DATA_DIR = os.path.join(BASE_DIR, 'data')
+# 数据目录（代理扩展、浏览器配置等）- 现在在 db/ 目录下
+DB_DIR = os.path.join(BASE_DIR, 'db')
+DATA_DIR = os.path.join(DB_DIR, 'data')
 PROFILES_DIR = os.path.join(DATA_DIR, 'profiles')
 PROXY_EXT_DIR = os.path.join(DATA_DIR, 'proxy_ext')
 
 # 确保目录存在
+os.makedirs(DB_DIR, exist_ok=True)
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(PROFILES_DIR, exist_ok=True)
 os.makedirs(PROXY_EXT_DIR, exist_ok=True)
@@ -28,14 +30,60 @@ TELEGRAM_API_HASH = 'bb23c410c63a820d7c4209e0606d4aea'
 TELEGRAM_TARGET_CHANNEL = 'stake_cn_chat_room'
 
 # Telegram 代理配置（根据平台不同）
+# 会话文件路径（在 db/ 目录下）
+TELEGRAM_SESSION_FILE = os.path.join(DB_DIR, 'stake_listener_session.session')
+
 if IS_WINDOWS:
-    # Windows 配置（通常需要代理）
-    TELEGRAM_PROXY = ('socks5', '127.0.0.1', 10808)
-    TELEGRAM_SESSION_FILE = 'stake_listener_session'
+    # ==================== Windows 代理配置 ====================
+    # Telethon 需要使用字典格式的代理配置
+    
+    # 方式 1: SOCKS5 代理（无用户名密码）
+    TELEGRAM_PROXY = {
+        'proxy_type': 'socks5',
+        'addr': '127.0.0.1',
+        'port': 10808,
+        'rdns': True
+    }
+    
+    # 方式 2: SOCKS5 代理（带用户名密码）
+    # TELEGRAM_PROXY = {
+    #     'proxy_type': 'socks5',
+    #     'addr': '127.0.0.1',
+    #     'port': 10808,
+    #     'username': 'your_username',
+    #     'password': 'your_password',
+    #     'rdns': True
+    # }
+    
+    # 方式 3: HTTP 代理（无用户名密码）
+    # TELEGRAM_PROXY = {
+    #     'proxy_type': 'http',
+    #     'addr': '127.0.0.1',
+    #     'port': 8080,
+    #     'rdns': True
+    # }
+    
+    # 方式 4: HTTP 代理（带用户名密码）
+    # TELEGRAM_PROXY = {
+    #     'proxy_type': 'http',
+    #     'addr': '127.0.0.1',
+    #     'port': 8080,
+    #     'username': 'your_username',
+    #     'password': 'your_password',
+    #     'rdns': True
+    # }
+    
+    # 方式 5: 不使用代理（如果有 VPN 或可以直接访问）
+    # TELEGRAM_PROXY = None
+    
+    # 常见代理软件默认端口：
+    # - Clash: 7890 (HTTP), 7891 (SOCKS5)
+    # - V2Ray: 10808 (SOCKS5)
+    # - Shadowsocks: 1080 (SOCKS5)
+    # - 请根据你的实际代理端口修改
 else:
     # Linux 配置（通常不需要代理，可以直接访问）
     TELEGRAM_PROXY = None  # Linux 服务器通常可以直接访问 Telegram
-    TELEGRAM_SESSION_FILE = 'stake_listener_session'
 
 # ==================== 浏览器配置 ====================
 # DrissionPage 浏览器配置
