@@ -181,7 +181,7 @@ class ClaimRecord(models.Model):
         ('already_claimed', '🔁 已领过'),
         ('error', '❓ 其他错误'),
     ]
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, verbose_name="状态")
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES, verbose_name="状态")
     
     bonus_value = models.CharField(max_length=50, null=True, blank=True, verbose_name="奖金金额")
     response_time_ms = models.IntegerField(null=True, verbose_name="响应时间(ms)")

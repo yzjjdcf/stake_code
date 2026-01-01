@@ -61,7 +61,7 @@ from serverbot.bypass import run_pre_logic_capsolver
 from serverbot.utils import fetch_ip_location
 
 
-def request_single_account(account, target_code, code_record):
+def request_single_account(account, target_code, code_record, message_received_time=None):
     """
     单个账号处理逻辑：
     - 代理分配并识别归属地
@@ -71,7 +71,10 @@ def request_single_account(account, target_code, code_record):
         account: 账号对象
         target_code: 目标代码
         code_record: 本次推送的 CodeRecord 对象（每次推送都是唯一的）
+        message_received_time: Telegram 收到消息的时间戳（time.perf_counter()），用于计算总耗时
     """
+    # 记录账号开始处理的时间（排除错峰延迟的影响）
+    account_start_time = time.perf_counter()
     needs_warmup = False
 
     # --- 第一步：代理检测与分配 ---
@@ -192,12 +195,27 @@ def request_single_account(account, target_code, code_record):
                 continue
             break  # 其他严重错误直接中断
 
+    # 计算总耗时（毫秒）
+    # 优先使用账号开始处理时间，这样不受错峰延迟影响
+    # 如果提供了 message_received_time，也计算从收到消息到完成的时间
+    total_elapsed_ms = None
+    if account_start_time:
+        # 从账号开始处理到请求完成的时间（排除错峰延迟）
+        total_elapsed_ms = int((time.perf_counter() - account_start_time) * 1000)
+    
+    # 可选：也计算从收到消息到完成的时间（包含错峰延迟）
+    # 如果需要看到包含错峰延迟的总耗时，可以取消下面的注释
+    # if message_received_time:
+    #     total_elapsed_from_message = int((time.perf_counter() - message_received_time) * 1000)
+    #     logger.debug(f"   从收到消息到完成: {total_elapsed_from_message}ms (包含错峰延迟)")
+    
     handle_response_result(
         response=response,
         account=account,
         log_port=log_port,
         location=location,
         elapsed_ms=elapsed_ms,
+        total_elapsed_ms=total_elapsed_ms,  # 从收到消息到请求完成的总耗时
         last_error=last_error,
         target_code=target_code,
         code_record=code_record
@@ -205,22 +223,32 @@ def request_single_account(account, target_code, code_record):
 
 
 # ================= 2. 结果解析方法 (深度逻辑) =================
-def handle_response_result(response, account, log_port, location, elapsed_ms, last_error, target_code, code_record):
+def handle_response_result(response, account, log_port, location, elapsed_ms, total_elapsed_ms, last_error, target_code, code_record):
     """
     深度解析 Stake GraphQL 返回的 JSON 数据
     并记录到数据库
+    
+    Args:
+        elapsed_ms: 单个请求的耗时（毫秒）
+        total_elapsed_ms: 从 Telegram 收到消息到请求完成的总耗时（毫秒）
     """
     claim_status = 'error'
     bonus_value = None
     error_msg = None
     
+    # 格式化耗时信息
+    if total_elapsed_ms is not None:
+        time_info = f"请求耗时 {elapsed_ms}ms | 总耗时 {total_elapsed_ms}ms"
+    else:
+        time_info = f"耗时 {elapsed_ms}ms"
+    
     if not response:
-        logger.warning(f"⚠️ {account.username} ({log_port} - {location}) 彻底异常: {last_error[:40]} | 耗时 {elapsed_ms}ms")
+        logger.warning(f"⚠️ {account.username} ({log_port} - {location}) 彻底异常: {last_error[:40]} | {time_info}")
         claim_status = 'error'
         error_msg = last_error[:200] if last_error else "无响应"
     elif response.status_code == 403:
         # 情况 A: 403 盾拦截
-        logger.warning(f"🛑 {account.username} ({log_port} - {location}): 403 拦截 | 耗时 {elapsed_ms}ms")
+        logger.warning(f"🛑 {account.username} ({log_port} - {location}): 403 拦截 | {time_info}")
         claim_status = 'error_403'
         StakeAccount.objects.filter(pk=account.pk).update(cookies_json=None)
         # 传递 target_code，过盾完成后会自动复抢
@@ -245,23 +273,23 @@ def handle_response_result(response, account, log_port, location, elapsed_ms, la
                     "未找到或不可用" in err_msg or 
                     "Bonus code cannot be found" in err_msg or
                     "not found" in err_msg.lower()):
-                    logger.warning(f"❌ {account.username} ({log_port} - {location}): 无效码（未找到或不可用）| 耗时 {elapsed_ms}ms")
+                    logger.warning(f"❌ {account.username} ({log_port} - {location}): 无效码（未找到或不可用）| {time_info}")
                     claim_status = 'not_found'
                     error_msg = err_msg
                 else:
-                    logger.warning(f"❓ {account.username} ({log_port} - {location}): 接口报错: {err_msg} | 耗时 {elapsed_ms}ms")
+                    logger.warning(f"❓ {account.username} ({log_port} - {location}): 接口报错: {err_msg} | {time_info}")
                     claim_status = 'error'
                     error_msg = err_msg
             elif data_root is None:
                 # data 为 null，且没有 errors（这种情况应该不会发生，但为了安全）
-                logger.warning(f"❌ {account.username} ({log_port} - {location}): 返回 Data 为 null | 耗时 {elapsed_ms}ms")
+                logger.warning(f"❌ {account.username} ({log_port} - {location}): 返回 Data 为 null | {time_info}")
                 claim_status = 'not_found'
                 error_msg = "返回 Data 为 null"
             else:
                 # 2. 解析 Data 字段（data 不为 null）
                 info = data_root.get('bonusCodeInformation')
                 if info is None:
-                    logger.warning(f"❌ {account.username} ({log_port} - {location}): 无效代码结构 | 耗时 {elapsed_ms}ms")
+                    logger.warning(f"❌ {account.username} ({log_port} - {location}): 无效代码结构 | {time_info}")
                     claim_status = 'error'
                     error_msg = "无效代码结构"
                 else:
@@ -271,33 +299,33 @@ def handle_response_result(response, account, log_port, location, elapsed_ms, la
                     # 3. 根据 Stake 状态码分支判定
                     if status == 'bonusCodeInactive':
                         # 码有效，但次数已用尽
-                        logger.info(f"⌛ {account.username} ({log_port} - {location}): code次数用尽 (Inactive) | 耗时 {elapsed_ms}ms")
+                        logger.info(f"⌛ {account.username} ({log_port} - {location}): code次数用尽 (Inactive) | {time_info}")
                         claim_status = 'inactive'
                     elif status == 'available':
                         # 码有效且可用
-                        logger.info(f"💰 {account.username} ({log_port} - {location}): 代码有效且可用 (Available)！ | 耗时 {elapsed_ms}ms")
+                        logger.info(f"💰 {account.username} ({log_port} - {location}): 代码有效且可用 (Available)！ | {time_info}")
                         claim_status = 'success'
                         # 如果代码有效且有金额，会在 handle_response_result 中更新 CodeRecord
                     elif status == 'alreadyClaimed':
-                        logger.info(f"🔁 {account.username} ({log_port} - {location}): 该代码已领过 | 耗时 {elapsed_ms}ms")
+                        logger.info(f"🔁 {account.username} ({log_port} - {location}): 该代码已领过 | {time_info}")
                         claim_status = 'already_claimed'
                     elif status == 'weeklyWagerRequirement':
                         # 需要满足周投注要求
-                        logger.info(f"📋 {account.username} ({log_port} - {location}): 需要周投注要求 (WeeklyWagerRequirement) | 耗时 {elapsed_ms}ms")
+                        logger.info(f"📋 {account.username} ({log_port} - {location}): 需要周投注要求 (WeeklyWagerRequirement) | {time_info}")
                         claim_status = 'weekly_wager_requirement'
                         error_msg = "需要满足周投注要求才能使用此代码"
                     else:
-                        logger.info(f"✅ {account.username} ({log_port} - {location}): [200 OK] 状态: {status} | 耗时 {elapsed_ms}ms")
+                        logger.info(f"✅ {account.username} ({log_port} - {location}): [200 OK] 状态: {status} | {time_info}")
                         claim_status = 'error'
                         error_msg = f"未知状态: {status}"
 
         except Exception as e:
-            logger.error(f"⚠️ {account.username} ({log_port} - {location}): 解析 JSON 失败: {e} | 耗时 {elapsed_ms}ms")
+            logger.error(f"⚠️ {account.username} ({log_port} - {location}): 解析 JSON 失败: {e} | {time_info}")
             claim_status = 'error'
             error_msg = str(e)[:200]
     else:
         # 情况 C: 其他 HTTP 状态码 (500, 502 等)
-        logger.warning(f"❌ {account.username} ({log_port} - {location}): 错误状态 {response.status_code} | 耗时 {elapsed_ms}ms")
+        logger.warning(f"❌ {account.username} ({log_port} - {location}): 错误状态 {response.status_code} | {time_info}")
         claim_status = 'error'
         error_msg = f"HTTP {response.status_code}"
     
@@ -361,11 +389,15 @@ def handle_response_result(response, account, log_port, location, elapsed_ms, la
     except Exception as e:
         logger.error(f"⚠️ 记录数据库失败: {e}")
 
-def redeem_bonus_task(target_code):
+def redeem_bonus_task(target_code, message_received_time=None):
     """
     领取红包代码任务
     收到码直接执行请求，不检查是否有记录
     每次推送都创建唯一的 CodeRecord（以时间先后为准）
+    
+    Args:
+        target_code: 目标代码
+        message_received_time: Telegram 收到消息的时间戳（time.perf_counter()），用于计算总耗时
     """
     accounts = StakeAccount.objects.filter(is_active=True)
     if not accounts.exists():
@@ -386,7 +418,7 @@ def redeem_bonus_task(target_code):
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         for account in accounts:
-            executor.submit(request_single_account, account, target_code, code_record)
+            executor.submit(request_single_account, account, target_code, code_record, message_received_time)
             # --- 【核心修复】：错峰请求 ---
             # 这样请求会变成排队发出，极大降低 56 错误
             time.sleep(random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX))

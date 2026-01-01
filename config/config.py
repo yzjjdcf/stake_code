@@ -35,9 +35,10 @@ TELEGRAM_CHANNELS = {
     'HighRollersStake': 'high_rollers_parser',  # 频道1：HighRollersStake
     'RainsTEAM': 'rains_team_parser',  # 频道2：RainsTEAM（复杂消息格式，无空格代码）
     # 'stakeimgantengofficial': 'rains_team_parser',  # 频道3：Stake.com - Challenge Info & Bonus Drop（使用 rains_team_parser）
-    '-1002181343631': 'daily_code_parser',  # 频道4：Daily Code 频道（使用 daily_code_parser）
-    # 'stake_cn_chat_room': 'rains_team_parser',  # 频道5：原来的频道（使用 rains_team_parser 方便测试）
-    '-1003315955015': 'rains_team_parser',  # 频道5的ID（stake中文避风港），确保能匹配到
+    # '-1002181343631': 'daily_code_parser',  # 频道4：Daily Code 频道（使用 daily_code_parser）
+    'StakecomDailyDrops': 'stakecom_daily_drops_parser',  # 频道5：Stake.com - Daily Drops（支持视频和文本）
+    'stake_cn_chat_room': 'rains_team_parser',  # 频道6：测试频道（使用 stakecom_daily_drops_parser 进行测试）
+    # '-1003315955015': 'stakecom_daily_drops_parser',  # 频道6的ID（stake中文避风港），确保能匹配到
 }
 
 # 兼容旧配置（如果设置了 TELEGRAM_TARGET_CHANNEL，会自动添加到 TELEGRAM_CHANNELS）
@@ -161,3 +162,13 @@ REQUEST_DELAY_MAX = 0.3
 
 # 日志配置
 LOG_LEVEL = 'INFO'  # DEBUG, INFO, WARNING, ERROR
+
+# ==================== OpenAI 配置 ====================
+# 第三方 ChatGPT API 配置（用于识别视频中的代码）
+# API Endpoint
+OPENAI_API_BASE_URL = 'https://api.gpt.ge/v1/chat/completions'
+# API Key（用于 ChatGPT 识别视频中的代码）
+# 如果不需要视频识别功能，可以留空或注释掉
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', 'sk-t9k1dFDN5BiApHUz63Ec585e880e4a6cAb64421bDc2e7650')  # 优先从环境变量读取，如果没有则使用默认值
+# 使用的模型（必须是支持图片分析的模型）
+OPENAI_MODEL = 'gpt-4o'  # 或使用其他支持图片分析的模型
