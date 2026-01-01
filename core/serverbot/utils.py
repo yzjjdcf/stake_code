@@ -51,16 +51,61 @@ bypass_log_file = os.path.join(log_dir, 'bypass.log')
 bypass_logger = logging.getLogger('bypass')
 
 
+# 统一的代理解析函数
+def parse_proxy_address(proxy_address: str) -> dict:
+    """
+    解析代理地址，仅支持新格式：host:port:username:password
+    例如：isp.decodo.com:10001:spoigpsfuo:xkp5JeXPk3Ly+tn92h
+    
+    Returns:
+        dict: {
+            'host': str,
+            'port': int,
+            'username': str,
+            'password': str,
+            'scheme': str (默认为http)
+        } 或 None（如果解析失败）
+    """
+    if not proxy_address:
+        return None
+    
+    proxy_address = proxy_address.strip()
+    
+    # 只支持新格式：host:port:username:password（至少4个冒号分隔的部分）
+    parts = proxy_address.split(':')
+    if len(parts) >= 4:
+        host = parts[0]
+        try:
+            port = int(parts[1])
+        except (ValueError, IndexError):
+            return None
+        username = parts[2] if len(parts) > 2 else ''
+        password = ':'.join(parts[3:]) if len(parts) > 3 else ''  # 密码可能包含冒号
+        
+        return {
+            'host': host,
+            'port': port,
+            'username': username,
+            'password': password,
+            'scheme': 'http'  # 新格式默认为 http
+        }
+    
+    return None
+
+
 # 1. 代理插件生成逻辑 (处理带账号密码的代理)
 def get_proxy_ext(proxy_url, t_id):
     """解决 DrissionPage 报错的关键补丁：生成临时扩展处理账号密码"""
     try:
-        # 兼容处理数据库存储的完整 URI
-        p = urllib.parse.urlparse(proxy_url)
-        user = p.username
-        pwd = p.password
-        host = p.hostname
-        port = p.port
+        # 使用统一的代理解析函数
+        proxy_info = parse_proxy_address(proxy_url)
+        if not proxy_info:
+            return None
+        
+        user = proxy_info.get('username')
+        pwd = proxy_info.get('password')
+        host = proxy_info.get('host')
+        port = proxy_info.get('port')
 
         if not all([user, pwd, host, port]):
             return None
@@ -145,7 +190,13 @@ def run_pre_logic(account):
         ProxyPool.objects.filter(pk=account.proxy.pk).update(location=location)
         account.proxy.location = location
 
-    bypass_logger.info(f"账号: {account.username} | 代理: {account.proxy.address.split('@')[-1] if '@' in account.proxy.address else account.proxy.address}")
+    # 格式化代理地址用于日志显示
+    proxy_display = account.proxy.address
+    proxy_info = parse_proxy_address(account.proxy.address)
+    if proxy_info:
+        # 只显示 host:port，隐藏用户名和密码
+        proxy_display = f"{proxy_info['host']}:{proxy_info['port']}"
+    bypass_logger.info(f"账号: {account.username} | 代理: {proxy_display}")
 
     # 2. 生成代理扩展
     ext_path = get_proxy_ext(account.proxy.address, account.id)
@@ -313,8 +364,31 @@ def parse_proxy(raw_url):
 
 def fetch_ip_location(proxy_addr):
     """通过代理获取其归属地"""
-    proxies = {"http": proxy_addr, "https": proxy_addr}
     try:
+        # 解析代理地址（新格式：host:port:username:password）
+        proxy_info = parse_proxy_address(proxy_addr)
+        if not proxy_info:
+            return "未知"
+        
+        # 构建 curl_cffi 需要的代理格式
+        # 注意：需要对用户名和密码进行 URL 编码，避免特殊字符（如 +、@、: 等）导致解析错误
+        from urllib.parse import quote
+        host = proxy_info['host']
+        port = proxy_info['port']
+        username = proxy_info.get('username') or ''
+        password = proxy_info.get('password') or ''
+        
+        if username and password:
+            # 有认证信息的代理，对用户名和密码进行 URL 编码
+            encoded_username = quote(username, safe='')
+            encoded_password = quote(password, safe='')
+            proxy_url = f"http://{encoded_username}:{encoded_password}@{host}:{port}"
+        else:
+            # 无认证信息的代理
+            proxy_url = f"http://{host}:{port}"
+        
+        proxies = {"http": proxy_url, "https": proxy_url}
+        
         # 使用 ip-api.com，无需 Key，直接返回 JSON
         # 注意：这里也用 curl_cffi 防止被反爬
         from curl_cffi import requests as curl_requests
@@ -328,6 +402,6 @@ def fetch_ip_location(proxy_addr):
         if data.get('status') == 'success':
             # 返回 格式如：香港、德国、美国
             return data.get('country')
-    except:
+    except Exception as e:
         pass
     return "未知"

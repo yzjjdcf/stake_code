@@ -27,6 +27,17 @@ class StakeAccount(models.Model):
     username = models.CharField("Stake用户名", max_length=100, default='')
     token = models.TextField("Stake令牌", default='')
 
+    # 记录创建者（用于权限控制）
+    created_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name="创建者",
+        related_name='created_accounts',
+        help_text="记录创建此账号的用户"
+    )
+
     # 关联代理池
     proxy = models.ForeignKey(
         ProxyPool,
@@ -56,6 +67,14 @@ class StakeAccount(models.Model):
     )
     # 添加此行：默认值为 True (激活)
     is_active = models.BooleanField(default=True, verbose_name="是否激活")
+
+    class Meta:
+        verbose_name = "Stake账号"
+        verbose_name_plural = "Stake账号"
+        permissions = [
+            ('view_own_accounts', '可以查看自己创建的账号'),
+            ('manage_own_accounts', '可以管理自己创建的账号'),
+        ]
 
     def __str__(self):
         return f"{self.username} (ID: {self.id})"
@@ -151,13 +170,14 @@ class ClaimRecord(models.Model):
     code_record = models.ForeignKey(CodeRecord, on_delete=models.SET_NULL, null=True, related_name='claim_records', verbose_name="代码记录")
     code = models.CharField(max_length=100, verbose_name="红包代码", db_index=True)
     
-    # 状态：success(成功), failure(失败), error_403(403错误), not_found(找不到), inactive(限额已满), already_claimed(已领过)
+    # 状态：success(成功), failure(失败), error_403(403错误), not_found(找不到), inactive(code次数用尽), already_claimed(已领过), weekly_wager_requirement(需要周投注要求)
     STATUS_CHOICES = [
         ('success', '✅ 成功'),
         ('failure', '❌ 失败'),
         ('error_403', '⚠️ 403错误'),
         ('not_found', '❌ 找不到'),
-        ('inactive', '⌛ 限额已满'),
+        ('inactive', '⌛ code次数用尽'),
+        ('weekly_wager_requirement', '📋 需要周投注要求'),
         ('already_claimed', '🔁 已领过'),
         ('error', '❓ 其他错误'),
     ]
@@ -167,6 +187,7 @@ class ClaimRecord(models.Model):
     response_time_ms = models.IntegerField(null=True, verbose_name="响应时间(ms)")
     is_retry = models.BooleanField(default=False, verbose_name="是否重试")
     error_message = models.TextField(null=True, blank=True, verbose_name="错误信息")
+    response_body = models.TextField(null=True, blank=True, verbose_name="响应体", help_text="记录完整的API响应内容")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
     
     class Meta:

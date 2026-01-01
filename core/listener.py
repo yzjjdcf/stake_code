@@ -168,6 +168,75 @@ def parse_code_rains_team(text):
     
     return None
 
+def parse_code_daily_code(text):
+    """
+    解析 Daily Code 频道的代码
+    格式：
+    🎁 Daily Code - AG7 🎁
+    
+    Сo​ɗ​e‍: stakecomg8f2t6l
+    Code: @CodesArdag
+    
+    需要解析出 stakecomg8f2t6l（注意第一行可能包含特殊字符，第二行是用户名需要过滤）
+    """
+    import re
+    if not text:
+        return None
+    
+    # 按行分割
+    lines = text.split('\n')
+    
+    # 策略1: 查找包含 "Code:" 或类似格式的行（可能包含特殊字符）
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        
+        # 查找包含 "Code:" 或类似格式的行（支持特殊字符，如西里尔字母）
+        # 使用更宽松的匹配，查找任何包含 "code" 和冒号的行
+        # 模式1: Code: stakecomg8f2t6l (标准格式)
+        # 模式2: Сo​ɗ​e‍: stakecomg8f2t6l (特殊字符格式)
+        # 使用正则表达式查找 "code" 后面跟着冒号，然后提取后面的代码
+        
+        # 先尝试标准格式
+        match = re.search(r'[Cc]ode[：:]\s*([a-z0-9]+)', line, re.IGNORECASE)
+        if match:
+            code = match.group(1).strip()
+            # 过滤掉以 @ 开头的（这是用户名，不是代码）
+            if code.startswith('@'):
+                continue
+            # 验证代码格式（应该以 stakecom 开头，或者至少是小写字母和数字）
+            if re.match(r'^[a-z0-9]+$', code) and len(code) >= 10:
+                return code.lower()
+        
+        # 尝试特殊字符格式（查找包含 "code" 关键词的行，即使有特殊字符）
+        # 查找行中包含 "code" 和冒号的情况
+        if re.search(r'[Cc]ode|code|Сo|ɗ|e', line, re.IGNORECASE) and ':' in line:
+            # 尝试提取冒号后面的内容
+            parts = line.split(':', 1)
+            if len(parts) > 1:
+                potential_code = parts[1].strip()
+                # 移除可能的后续内容（如 @CodesArdag 等）
+                potential_code = re.split(r'[\s@\n]', potential_code)[0]
+                # 过滤掉以 @ 开头的
+                if potential_code.startswith('@'):
+                    continue
+                # 验证代码格式（stakecom 开头，或者至少是小写字母和数字）
+                if re.match(r'^[a-z0-9]+$', potential_code) and len(potential_code) >= 10:
+                    return potential_code.lower()
+    
+    # 策略2: 查找包含 "stakecom" 开头的代码（更宽松的匹配，直接从文本中提取）
+    text_normalized = text.replace('\n', ' ').replace('\r', ' ')
+    stakecom_pattern = r'stakecom[a-z0-9]{6,}'
+    match = re.search(stakecom_pattern, text_normalized, re.IGNORECASE)
+    if match:
+        code = match.group(0).lower()
+        # 确保不是用户名（不以 @ 开头）
+        if not code.startswith('@'):
+            return code
+    
+    return None
+
 def parse_code_default(text):
     """
     默认解析器：截取前 20 个字符
@@ -180,6 +249,7 @@ def parse_code_default(text):
 CODE_PARSERS = {
     'high_rollers_parser': parse_code_high_rollers,
     'rains_team_parser': parse_code_rains_team,
+    'daily_code_parser': parse_code_daily_code,
     'default_parser': parse_code_default,
 }
 

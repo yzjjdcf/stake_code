@@ -1,0 +1,118 @@
+{% extends "admin/change_list.html" %}
+
+{% block search %}
+    <div style="margin-bottom: 10px; padding: 10px; background-color: #f8f9fa; border-radius: 5px;">
+        <form method="get" action="" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+            <!-- 保留原有的筛选参数 -->
+            {% for key, value in request.GET.items %}
+                {% if key != 'code_search' and key != 'username_search' and key != 'creator_search' and key != 'status_search' and key != 'bonus_search' and key != 'date_start' and key != 'date_end' and key != 'q' %}
+                    <input type="hidden" name="{{ key }}" value="{{ value }}">
+                {% endif %}
+            {% endfor %}
+            
+            <!-- 代码搜索框 -->
+            <div style="display: flex; align-items: center; gap: 5px;">
+                <label style="white-space: nowrap; font-weight: bold;">代码：</label>
+                <input type="text" name="code_search" value="{{ code_search|default:'' }}" 
+                       placeholder="搜索代码" 
+                       style="padding: 5px 10px; border: 1px solid #ddd; border-radius: 4px; min-width: 150px;">
+            </div>
+            
+            <!-- 账号用户名搜索框 -->
+            <div style="display: flex; align-items: center; gap: 5px;">
+                <label style="white-space: nowrap; font-weight: bold;">账号：</label>
+                <input type="text" name="username_search" value="{{ username_search|default:'' }}" 
+                       placeholder="搜索账号用户名" 
+                       style="padding: 5px 10px; border: 1px solid #ddd; border-radius: 4px; min-width: 150px;">
+            </div>
+            
+            <!-- 创建者搜索框（仅超级管理员） -->
+            {% if request.user.is_superuser %}
+            <div style="display: flex; align-items: center; gap: 5px;">
+                <label style="white-space: nowrap; font-weight: bold;">创建者：</label>
+                <input type="text" name="creator_search" value="{{ creator_search|default:'' }}" 
+                       placeholder="搜索创建者用户名" 
+                       style="padding: 5px 10px; border: 1px solid #ddd; border-radius: 4px; min-width: 150px;">
+            </div>
+            {% endif %}
+            
+            <!-- 状态下拉框 -->
+            <div style="display: flex; align-items: center; gap: 5px;">
+                <label style="white-space: nowrap; font-weight: bold;">状态：</label>
+                <select name="status_search" 
+                        style="padding: 5px 10px; border: 1px solid #ddd; border-radius: 4px; min-width: 150px;">
+                    <option value="">全部</option>
+                    {% for status_value, status_display in status_list %}
+                        <option value="{{ status_value }}" {% if status_search == status_value %}selected{% endif %}>
+                            {{ status_display }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+            
+            <!-- 金额下拉框 -->
+            <div style="display: flex; align-items: center; gap: 5px;">
+                <label style="white-space: nowrap; font-weight: bold;">金额：</label>
+                <select name="bonus_search" 
+                        style="padding: 5px 10px; border: 1px solid #ddd; border-radius: 4px; min-width: 150px;">
+                    <option value="">全部</option>
+                    {% for bonus_value, bonus_display in bonus_list %}
+                        <option value="{{ bonus_value }}" {% if bonus_search == bonus_value %}selected{% endif %}>
+                            {{ bonus_display }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+            
+            <!-- 时间区间搜索框 -->
+            <div style="display: flex; align-items: center; gap: 5px;">
+                <label style="white-space: nowrap; font-weight: bold;">时间：</label>
+                <input type="date" name="date_start" value="{{ date_start|default:'' }}" 
+                       placeholder="开始时间" 
+                       style="padding: 5px 10px; border: 1px solid #ddd; border-radius: 4px; min-width: 150px;">
+                <span style="margin: 0 5px;">至</span>
+                <input type="date" name="date_end" value="{{ date_end|default:'' }}" 
+                       placeholder="结束时间" 
+                       style="padding: 5px 10px; border: 1px solid #ddd; border-radius: 4px; min-width: 150px;">
+            </div>
+            
+            <!-- 搜索按钮 -->
+            <button type="submit" style="padding: 5px 15px; background-color: #417690; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                搜索
+            </button>
+            
+            <!-- 清除按钮 -->
+            {% if code_search or username_search or creator_search or status_search or bonus_search or date_start or date_end %}
+            <a href="?" style="padding: 5px 15px; background-color: #ba2121; color: white; text-decoration: none; border-radius: 4px;">
+                清除
+            </a>
+            {% endif %}
+        </form>
+    </div>
+{% endblock %}
+
+{% block result_list %}
+    {{ block.super }}
+    
+    <div style="margin-top: 20px; padding: 15px; background-color: #f8f9fa; border: 1px solid #dee2e6; border-radius: 5px;">
+        <h3 style="margin-top: 0; color: #495057;">📊 筛选统计</h3>
+        <div style="display: flex; gap: 30px; flex-wrap: wrap;">
+            <div>
+                <strong style="color: #6c757d;">总记录数：</strong>
+                <span style="font-size: 18px; color: #495057;">{{ total_records|default:0 }}</span>
+            </div>
+            <div>
+                <strong style="color: #6c757d;">成功记录数：</strong>
+                <span style="font-size: 18px; color: #28a745;">{{ success_count|default:0 }}</span>
+            </div>
+            <div>
+                <strong style="color: #6c757d;">总金额：</strong>
+                <span style="font-size: 24px; font-weight: bold; color: #28a745;">${{ total_amount|default:0|floatformat:2 }}</span>
+            </div>
+        </div>
+        <p style="margin-top: 10px; margin-bottom: 0; color: #6c757d; font-size: 12px;">
+            * 总金额仅统计状态为"成功"且有奖金金额的记录，不考虑分页
+        </p>
+    </div>
+{% endblock %}
+

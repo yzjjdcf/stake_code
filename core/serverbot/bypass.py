@@ -71,24 +71,31 @@ def parse_proxy_to_capsolver_format(proxy_address: str, use_format_2: bool = Fal
     将代理地址转换为 Capsolver API 需要的格式
     
     Args:
-        proxy_address: 代理地址，格式如 "http://user:pass@host:port" 或 "socks5://user:pass@host:port"
+        proxy_address: 代理地址，新格式：host:port:username:password
+        例如：isp.decodo.com:10001:spoigpsfuo:xkp5JeXPk3Ly+tn92h
         use_format_2: 是否使用格式2（字符串格式），否则使用格式1（分离字段）
     
     Returns:
         dict: Capsolver 代理配置
     """
     try:
-        parsed = urllib.parse.urlparse(proxy_address)
+        # 使用统一的代理解析函数
+        from .utils import parse_proxy_address
+        proxy_info = parse_proxy_address(proxy_address)
         
-        # 确定代理类型
-        proxy_type = parsed.scheme.lower()
+        if not proxy_info:
+            bypass_logger.error(f"❌ 无法解析代理地址: {proxy_address}")
+            return None
+        
+        host = proxy_info['host']
+        port = proxy_info['port']
+        username = proxy_info.get('username') or ''
+        password = proxy_info.get('password') or ''
+        proxy_type = proxy_info.get('scheme', 'http')
+        
+        # 确保代理类型有效
         if proxy_type not in ['http', 'https', 'socks4', 'socks5']:
             proxy_type = 'http'
-        
-        host = parsed.hostname
-        port = parsed.port or (1080 if proxy_type.startswith('socks') else 8080)
-        username = parsed.username or ''
-        password = parsed.password or ''
         
         if use_format_2:
             # 格式2: "proxy": "socks5:192.191.100.10:4780:user:pwd"
@@ -115,6 +122,8 @@ def parse_proxy_to_capsolver_format(proxy_address: str, use_format_2: bool = Fal
     except Exception as e:
         bypass_logger.error(f"❌ 解析代理地址失败: {e}")
         bypass_logger.error(f"   代理地址: {proxy_address}")
+        import traceback
+        bypass_logger.error(traceback.format_exc())
         return None
 
 

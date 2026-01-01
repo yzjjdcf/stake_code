@@ -109,9 +109,36 @@ def request_single_account(account, target_code, code_record):
 
     # --- 第四步：执行请求 ---
     proxy_addr = account.proxy.address.strip()
-    log_port = proxy_addr.split(':')[-1]
     location = account.proxy.location or "未知"
-    proxies = {"http": proxy_addr, "https": proxy_addr}
+    
+    # 解析代理地址（新格式：host:port:username:password）
+    from serverbot.utils import parse_proxy_address
+    proxy_info = parse_proxy_address(proxy_addr)
+    
+    if not proxy_info:
+        logger.warning(f"⚠️ {account.username}: 无法解析代理地址: {proxy_addr}")
+        return
+    
+    # 构建 curl_cffi 需要的代理格式
+    # curl_cffi 需要 http://user:pass@host:port 格式（从新格式转换）
+    # 注意：需要对用户名和密码进行 URL 编码，避免特殊字符（如 +、@、: 等）导致解析错误
+    from urllib.parse import quote
+    host = proxy_info['host']
+    port = proxy_info['port']
+    username = proxy_info.get('username') or ''
+    password = proxy_info.get('password') or ''
+    
+    if username and password:
+        # 有认证信息的代理，对用户名和密码进行 URL 编码
+        encoded_username = quote(username, safe='')
+        encoded_password = quote(password, safe='')
+        proxy_url = f"http://{encoded_username}:{encoded_password}@{host}:{port}"
+    else:
+        # 无认证信息的代理
+        proxy_url = f"http://{host}:{port}"
+    
+    proxies = {"http": proxy_url, "https": proxy_url}
+    log_port = str(port)  # 用于日志显示
 
     try:
         cookie_dict = {c['name']: c['value'] for c in json.loads(account.cookies_json)}
@@ -244,7 +271,7 @@ def handle_response_result(response, account, log_port, location, elapsed_ms, la
                     # 3. 根据 Stake 状态码分支判定
                     if status == 'bonusCodeInactive':
                         # 码有效，但次数已用尽
-                        logger.info(f"⌛ {account.username} ({log_port} - {location}): 码有效但次数已用尽 (Inactive) | 耗时 {elapsed_ms}ms")
+                        logger.info(f"⌛ {account.username} ({log_port} - {location}): code次数用尽 (Inactive) | 耗时 {elapsed_ms}ms")
                         claim_status = 'inactive'
                     elif status == 'available':
                         # 码有效且可用
@@ -254,6 +281,11 @@ def handle_response_result(response, account, log_port, location, elapsed_ms, la
                     elif status == 'alreadyClaimed':
                         logger.info(f"🔁 {account.username} ({log_port} - {location}): 该代码已领过 | 耗时 {elapsed_ms}ms")
                         claim_status = 'already_claimed'
+                    elif status == 'weeklyWagerRequirement':
+                        # 需要满足周投注要求
+                        logger.info(f"📋 {account.username} ({log_port} - {location}): 需要周投注要求 (WeeklyWagerRequirement) | 耗时 {elapsed_ms}ms")
+                        claim_status = 'weekly_wager_requirement'
+                        error_msg = "需要满足周投注要求才能使用此代码"
                     else:
                         logger.info(f"✅ {account.username} ({log_port} - {location}): [200 OK] 状态: {status} | 耗时 {elapsed_ms}ms")
                         claim_status = 'error'
@@ -269,53 +301,63 @@ def handle_response_result(response, account, log_port, location, elapsed_ms, la
         claim_status = 'error'
         error_msg = f"HTTP {response.status_code}"
     
-    # 记录到ClaimRecord和CodeRecord
-    # 只记录：success（有金额）、already_claimed、inactive
-    # 不记录：not_found、error、error_403
+    # 提取响应体（无论什么状态都记录）
+    response_body_str = None
     try:
-        # 如果是找不到的，不写入数据库
-        if claim_status == 'not_found':
-            return
+        if response:
+            # 尝试获取 JSON 格式的响应体
+            try:
+                response_body_str = json.dumps(response.json(), ensure_ascii=False, indent=2)
+            except:
+                # 如果不是 JSON，获取文本格式
+                try:
+                    response_body_str = response.text
+                except:
+                    response_body_str = f"无法获取响应体 (状态码: {response.status_code})"
+        else:
+            response_body_str = f"无响应对象 (错误: {last_error})"
+    except Exception as e:
+        response_body_str = f"提取响应体失败: {str(e)}"
+    
+    # 记录到ClaimRecord和CodeRecord
+    # 无论什么状态都记录，并保存响应体
+    try:
+        # 创建ClaimRecord（所有状态都记录）
+        ClaimRecord.objects.create(
+            account=account,
+            code_record=code_record,
+            code=target_code,
+            status=claim_status,
+            bonus_value=str(bonus_value) if bonus_value else None,
+            response_time_ms=elapsed_ms,
+            error_message=error_msg,
+            response_body=response_body_str
+        )
         
-        # 记录的状态：success（有金额）、already_claimed、inactive
-        should_record = False
-        if claim_status == 'success' and bonus_value:
-            should_record = True
-        elif claim_status == 'already_claimed':
-            should_record = True
+        # 更新CodeRecord统计信息（只更新特定状态）
+        update_fields = {}
+        if claim_status == 'success':
+            update_fields['success_count'] = F('success_count') + 1
+            if bonus_value:
+                update_fields['actual_value'] = str(bonus_value)
+                update_fields['status'] = 'valid'
         elif claim_status == 'inactive':
-            should_record = True
+            update_fields['failure_count'] = F('failure_count') + 1
+            if code_record.status == 'unknown':
+                update_fields['status'] = 'expired'
+        elif claim_status == 'already_claimed':
+            update_fields['failure_count'] = F('failure_count') + 1
+        elif claim_status == 'weekly_wager_requirement':
+            # 需要周投注要求：代码有效但账号不满足条件，视为失败但不影响代码有效性
+            update_fields['failure_count'] = F('failure_count') + 1
+        elif claim_status == 'error_403':
+            update_fields['error_403_count'] = F('error_403_count') + 1
         
-        if should_record:
-            # 创建ClaimRecord
-            ClaimRecord.objects.create(
-                account=account,
-                code_record=code_record,
-                code=target_code,
-                status=claim_status,
-                bonus_value=str(bonus_value) if bonus_value else None,
-                response_time_ms=elapsed_ms,
-                error_message=error_msg
-            )
-            
-            # 更新CodeRecord统计信息
-            update_fields = {}
-            if claim_status == 'success':
-                update_fields['success_count'] = F('success_count') + 1
-                if bonus_value:
-                    update_fields['actual_value'] = str(bonus_value)
-                    update_fields['status'] = 'valid'
-            elif claim_status == 'inactive':
-                update_fields['failure_count'] = F('failure_count') + 1
-                if code_record.status == 'unknown':
-                    update_fields['status'] = 'expired'
-            elif claim_status == 'already_claimed':
-                update_fields['failure_count'] = F('failure_count') + 1
-            
-            update_fields['total_attempts'] = F('total_attempts') + 1
-            
-            if update_fields:
-                CodeRecord.objects.filter(pk=code_record.pk).update(**update_fields)
+        # 所有状态都增加总尝试次数
+        update_fields['total_attempts'] = F('total_attempts') + 1
+        
+        if update_fields:
+            CodeRecord.objects.filter(pk=code_record.pk).update(**update_fields)
     except Exception as e:
         logger.error(f"⚠️ 记录数据库失败: {e}")
 

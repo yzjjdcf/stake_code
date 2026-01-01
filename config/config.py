@@ -32,11 +32,12 @@ TELEGRAM_API_HASH = 'bb23c410c63a820d7c4209e0606d4aea'
 # 格式：{频道ID或用户名: 解析器名称}
 # 注意：可以使用频道用户名（如 'stake_cn_chat_room'）或频道ID（如 '-1003315955015'）
 TELEGRAM_CHANNELS = {
-    # 'HighRollersStake': 'high_rollers_parser',  # 频道1：HighRollersStake
-    # 'RainsTEAM': 'rains_team_parser',  # 频道2：RainsTEAM（复杂消息格式，无空格代码）
-    'stakeimgantengofficial': 'rains_team_parser',  # 频道3：Stake.com - Challenge Info & Bonus Drop（使用 rains_team_parser）
-    # 'stake_cn_chat_room': 'rains_team_parser',  # 频道4：原来的频道（使用 rains_team_parser 方便测试）
-    # '-1003315955015': 'rains_team_parser',  # 频道4的ID（stake中文避风港），确保能匹配到
+    'HighRollersStake': 'high_rollers_parser',  # 频道1：HighRollersStake
+    'RainsTEAM': 'rains_team_parser',  # 频道2：RainsTEAM（复杂消息格式，无空格代码）
+    # 'stakeimgantengofficial': 'rains_team_parser',  # 频道3：Stake.com - Challenge Info & Bonus Drop（使用 rains_team_parser）
+    '-1002181343631': 'daily_code_parser',  # 频道4：Daily Code 频道（使用 daily_code_parser）
+    # 'stake_cn_chat_room': 'rains_team_parser',  # 频道5：原来的频道（使用 rains_team_parser 方便测试）
+    '-1003315955015': 'rains_team_parser',  # 频道5的ID（stake中文避风港），确保能匹配到
 }
 
 # 兼容旧配置（如果设置了 TELEGRAM_TARGET_CHANNEL，会自动添加到 TELEGRAM_CHANNELS）
