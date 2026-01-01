@@ -22,9 +22,16 @@ if os.path.exists(config_path):
     
     TELEGRAM_API_ID = config_module.TELEGRAM_API_ID
     TELEGRAM_API_HASH = config_module.TELEGRAM_API_HASH
-    TELEGRAM_TARGET_CHANNEL = config_module.TELEGRAM_TARGET_CHANNEL
     TELEGRAM_PROXY = config_module.TELEGRAM_PROXY
     TELEGRAM_SESSION_FILE = config_module.TELEGRAM_SESSION_FILE
+    
+    # 多频道配置
+    TELEGRAM_CHANNELS = getattr(config_module, 'TELEGRAM_CHANNELS', {})
+    TELEGRAM_TARGET_CHANNEL = getattr(config_module, 'TELEGRAM_TARGET_CHANNEL', None)
+    
+    # 兼容旧配置：如果设置了 TELEGRAM_TARGET_CHANNEL 但没有在 TELEGRAM_CHANNELS 中，自动添加
+    if TELEGRAM_TARGET_CHANNEL and TELEGRAM_TARGET_CHANNEL not in TELEGRAM_CHANNELS:
+        TELEGRAM_CHANNELS[TELEGRAM_TARGET_CHANNEL] = 'default_parser'
 else:
     raise ImportError(f"无法找到配置文件: {config_path}")
 
@@ -34,6 +41,37 @@ django.setup()
 
 # 导入领取函数
 from worker import redeem_bonus_task
+
+# ================= 3.5. 频道代码解析器 =================
+def parse_code_high_rollers(text):
+    """
+    解析 HighRollersStake 频道的代码
+    格式：- Code: stakecomxxxxx
+    """
+    import re
+    # 查找 "- Code: " 后面的内容
+    pattern = r'- Code:\s*([a-z0-9]+)'
+    match = re.search(pattern, text, re.IGNORECASE)
+    if match:
+        code = match.group(1).strip()
+        # 确保是小写
+        code = code.lower()
+        return code
+    return None
+
+def parse_code_default(text):
+    """
+    默认解析器：截取前 20 个字符
+    """
+    if text:
+        return text[:20].strip()
+    return None
+
+# 解析器映射
+CODE_PARSERS = {
+    'high_rollers_parser': parse_code_high_rollers,
+    'default_parser': parse_code_default,
+}
 
 # ================= 4. 配置日志 =================
 # 配置日志输出到文件和控制台（必须在其他代码之前）
@@ -96,15 +134,60 @@ client = TelegramClient(
 
 
 # ================= 6. 监听事件处理 =================
-@client.on(events.NewMessage(chats=TELEGRAM_TARGET_CHANNEL))
+# 获取所有频道列表
+CHANNEL_LIST = list(TELEGRAM_CHANNELS.keys())
+
+@client.on(events.NewMessage(chats=CHANNEL_LIST))
 async def my_event_handler(event):
     try:
+        # 获取频道信息
+        chat_id = event.chat_id
+        channel_username = None
+        channel_title = None
+        
+        try:
+            entity = await event.get_chat()
+            channel_username = getattr(entity, 'username', None)
+            channel_title = getattr(entity, 'title', None)
+        except:
+            pass
+        
+        # 确定使用哪个解析器
+        parser_name = None
+        channel_key = None
+        
+        # 优先通过用户名匹配
+        if channel_username:
+            # 去掉 @ 符号
+            username_clean = channel_username.lstrip('@')
+            if username_clean in TELEGRAM_CHANNELS:
+                channel_key = username_clean
+                parser_name = TELEGRAM_CHANNELS[username_clean]
+        
+        # 如果用户名匹配失败，尝试通过 ID 匹配（需要先获取频道实体）
+        if not parser_name:
+            for ch_key in TELEGRAM_CHANNELS:
+                try:
+                    entity = await client.get_entity(ch_key)
+                    if hasattr(entity, 'id') and entity.id == chat_id:
+                        channel_key = ch_key
+                        parser_name = TELEGRAM_CHANNELS[ch_key]
+                        break
+                except:
+                    continue
+        
+        # 如果还是找不到，使用默认解析器
+        if not parser_name:
+            parser_name = 'default_parser'
+            channel_key = f"unknown_{chat_id}"
+        
         # 记录收到消息的详细信息
         logger.info("=" * 50)
         logger.info("📩 收到新消息！")
+        logger.info(f"   频道: {channel_title or channel_key} (ID: {chat_id})")
+        logger.info(f"   解析器: {parser_name}")
         logger.info(f"   消息 ID: {event.id}")
         logger.info(f"   发送者 ID: {event.sender_id}")
-        logger.info(f"   聊天 ID: {event.chat_id}")
         logger.info(f"   原始文本长度: {len(event.raw_text) if event.raw_text else 0}")
         
         raw_text = event.raw_text.strip() if event.raw_text else ""
@@ -113,11 +196,18 @@ async def my_event_handler(event):
             logger.info("=" * 50)
             return
 
-        # 直接截取前 20 个字符
-        code = raw_text[:20]
+        # 使用对应的解析器提取代码
+        parser_func = CODE_PARSERS.get(parser_name, parse_code_default)
+        code = parser_func(raw_text)
+        
+        if not code:
+            logger.warning(f"   ⚠️ 无法从消息中提取代码，跳过处理")
+            logger.info(f"   原始内容: {raw_text[:200]}...")
+            logger.info("=" * 50)
+            return
 
         logger.info(f"   原始内容: {raw_text[:100]}...")
-        logger.info(f"   截取前10位代码: {code}")
+        logger.info(f"   提取的代码: {code}")
         logger.info(f"🚀 正在开启新线程执行同步请求任务...")
 
         # --- 修复核心：使用 asyncio.to_thread 运行同步函数 ---
@@ -136,18 +226,20 @@ async def main():
         logger.info("正在连接 Telegram 服务器...")
         await client.start()
         logger.info("✅ Telegram 客户端已连接")
-        logger.info(f"📡 监听频道: {TELEGRAM_TARGET_CHANNEL}")
+        logger.info(f"📡 监听频道数量: {len(CHANNEL_LIST)}")
         
-        # 验证频道是否存在
-        try:
-            entity = await client.get_entity(TELEGRAM_TARGET_CHANNEL)
-            channel_title = entity.title if hasattr(entity, 'title') else 'N/A'
-            channel_id = entity.id if hasattr(entity, 'id') else 'N/A'
-            logger.info(f"✅ 频道验证成功: {channel_title} (ID: {channel_id})")
-        except Exception as e:
-            logger.warning(f"⚠️ 频道验证失败: {e}")
-            logger.warning(f"   请确认频道名称或 ID 是否正确: {TELEGRAM_TARGET_CHANNEL}")
-            logger.warning(f"   提示：可以使用频道用户名（如 @channel_name）或频道 ID（如 -1001234567890）")
+        # 验证所有频道是否存在
+        for channel_key in CHANNEL_LIST:
+            try:
+                entity = await client.get_entity(channel_key)
+                channel_title = entity.title if hasattr(entity, 'title') else 'N/A'
+                channel_id = entity.id if hasattr(entity, 'id') else 'N/A'
+                parser_name = TELEGRAM_CHANNELS.get(channel_key, 'default_parser')
+                logger.info(f"✅ 频道验证成功: {channel_title} ({channel_key}) | ID: {channel_id} | 解析器: {parser_name}")
+            except Exception as e:
+                logger.warning(f"⚠️ 频道验证失败: {channel_key} - {e}")
+                logger.warning(f"   请确认频道名称或 ID 是否正确")
+                logger.warning(f"   提示：可以使用频道用户名（如 @channel_name）或频道 ID（如 -1001234567890）")
         
         logger.info("🎧 开始监听消息...")
         logger.info("   等待新消息中...")

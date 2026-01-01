@@ -2,6 +2,14 @@ from django.db import models
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 import threading
+import logging
+import os
+import sys
+
+# 配置日志（用于信号处理）
+# 使用 bypass logger，但不在 models.py 中配置 handler
+# handler 配置统一在 bypass.py 中完成，避免重复输出
+logger = logging.getLogger('bypass')
 
 
 
@@ -55,8 +63,10 @@ class StakeAccount(models.Model):
 
 @receiver(post_save, sender=StakeAccount)
 def trigger_warmup_on_new_user(sender, instance, created, **kwargs):
-    """创建用户时：优先分配空闲代理，若无空闲则复用已有代理"""
+    """创建用户时：优先分配空闲代理，若无空闲则复用已有代理，然后触发过盾"""
     if created:
+        logger.info(f"🆕 检测到新账号创建: {instance.username} (ID: {instance.id})")
+        
         # 1. 这里使用 Django 默认的反向查询字段名 'stakeaccount'
         proxy = ProxyPool.objects.filter(is_active=True, stakeaccount__isnull=True).first()
         is_reuse = False
@@ -72,22 +82,30 @@ def trigger_warmup_on_new_user(sender, instance, created, **kwargs):
 
             # 记录日志
             mode_str = "(复用模式)" if is_reuse else "(独占模式)"
-            print(f"[{instance.username}] 分配代理: {proxy.address} {mode_str}")
+            logger.info(f"✅ [{instance.username}] 分配代理: {proxy.address} {mode_str}")
 
             # 为了让后续线程拿到最新的 proxy 对象
             instance.proxy = proxy
         else:
-            print(f"[{instance.username}] 错误：代理池完全为空")
+            logger.error(f"❌ [{instance.username}] 错误：代理池完全为空，无法触发过盾")
+            return
 
-        # 3. 开启后台线程
-        from .utils import run_pre_logic
-        import threading
-        threading.Thread(target=run_pre_logic, args=(instance,), daemon=True).start()
+        # 3. 开启后台线程（使用 Capsolver，不使用浏览器）
+        try:
+            from .bypass import run_pre_logic_capsolver
+            logger.info(f"🚀 [{instance.username}] 启动 Capsolver 过盾任务...")
+            thread = threading.Thread(target=run_pre_logic_capsolver, args=(instance,), daemon=True)
+            thread.start()
+            logger.info(f"✅ [{instance.username}] 过盾任务线程已启动 (线程ID: {thread.ident})")
+        except ImportError as e:
+            logger.error(f"❌ [{instance.username}] 导入 bypass 模块失败: {e}", exc_info=True)
+        except Exception as e:
+            logger.error(f"❌ [{instance.username}] 启动过盾任务失败: {e}", exc_info=True)
 
 
 class CodeRecord(models.Model):
-    """记录推送到全员的代码"""
-    code = models.CharField(max_length=100, verbose_name="红包代码", unique=True, db_index=True)
+    """记录推送到全员的代码（每次推送都是唯一记录，以时间先后为准）"""
+    code = models.CharField(max_length=100, verbose_name="红包代码", db_index=True)  # 移除 unique=True，允许相同代码多次推送
     
     # 代码状态
     STATUS_CHOICES = [

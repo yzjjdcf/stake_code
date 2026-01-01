@@ -273,10 +273,37 @@ echo "📊 查看日志: tail -f db/logs/listener.log"
 - **Django Admin**: http://localhost:8000/admin
 - **服务器 IP**: http://YOUR_SERVER_IP:8000/admin
 
+## 🧪 测试过盾功能
+
+### 使用测试脚本（推荐）
+
+```bash
+# 使用账号 ID 测试
+bash start/测试过盾.sh 1
+
+# 使用用户名测试
+bash start/测试过盾.sh myusername
+```
+
+### 测试脚本功能
+
+- 自动启动 Xvfb 虚拟显示服务器
+- 设置 DISPLAY 环境变量
+- 执行过盾测试
+- 自动清理资源（退出时停止 Xvfb）
+
+### 查看测试日志
+
+```bash
+# 实时查看过盾日志
+tail -f db/logs/bypass.log
+```
+
 ## 📚 相关文件
 
 - `start/menu.sh` - 交互式菜单脚本
 - `start/start_all.sh` - 服务管理脚本
+- `start/测试过盾.sh` - 过盾测试脚本（结合 Xvfb）
 - `start/stake-django.service` - Django systemd 服务文件
 - `start/stake-listener.service` - Listener systemd 服务文件
 - `start/检查listener状态.sh` - Listener 状态检查脚本

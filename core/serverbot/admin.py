@@ -8,7 +8,7 @@ from django.contrib import admin, messages
 from . import models
 from .models import StakeAccount, ProxyPool, CodeRecord, ClaimRecord
 from .forms import ProxyImportForm
-from .utils import run_pre_logic  # 确保导入了你的核心逻辑
+from .bypass import run_pre_logic_capsolver  # 使用 Capsolver 过盾逻辑
 from django.utils.safestring import mark_safe
 import urllib.parse  # 必须写全，才能直接使用 urllib.parse.urlparse
 
@@ -210,7 +210,7 @@ class StakeAccountAdmin(admin.ModelAdmin):
         ]
         return custom_urls + urls
 
-    # 4. 强制更新 CF 的处理逻辑
+    # 4. 强制更新 CF 的处理逻辑（使用 Capsolver，不使用浏览器）
     def run_warmup_view(self, request, account_id):
         if request.method != 'POST':
             messages.error(request, "无效的请求方法")
@@ -218,9 +218,9 @@ class StakeAccountAdmin(admin.ModelAdmin):
         
         account = self.get_object(request, account_id)
         if account:
-            # 开启后台线程，执行过盾逻辑
-            threading.Thread(target=run_pre_logic, args=(account,), daemon=True).start()
-            messages.success(request, f"🚀 账号 {account.username} 的过盾任务已启动，请观察控制台日志。")
+            # 开启后台线程，执行 Capsolver 过盾逻辑（不使用浏览器）
+            threading.Thread(target=run_pre_logic_capsolver, args=(account,), daemon=True).start()
+            messages.success(request, f"🚀 账号 {account.username} 的 Capsolver 过盾任务已启动，请观察控制台日志。")
         else:
             messages.error(request, "账号不存在")
         return redirect('/admin/serverbot/stakeaccount/')

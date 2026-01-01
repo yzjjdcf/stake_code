@@ -42,7 +42,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'serverbot'
+    'serverbot.apps.ServerbotConfig'  # 使用完整的 AppConfig 路径，确保信号被注册
 ]
 
 # 默认主键字段类型（Django 3.2+ 要求）

@@ -4,6 +4,7 @@ import urllib.parse
 import shutil
 import os
 import logging
+import requests
 from pathlib import Path
 from datetime import datetime
 
@@ -45,26 +46,9 @@ os.makedirs(log_dir, exist_ok=True)
 bypass_log_file = os.path.join(log_dir, 'bypass.log')
 
 # 创建过盾专用 logger
+# 注意：handler 配置统一在 bypass.py 中完成，这里只获取 logger 实例
+# 避免重复配置导致日志重复输出
 bypass_logger = logging.getLogger('bypass')
-bypass_logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
-
-# 避免重复添加 handler
-if not bypass_logger.handlers:
-    file_handler = logging.FileHandler(bypass_log_file, encoding='utf-8')
-    file_handler.setLevel(logging.DEBUG)
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    
-    # 详细格式
-    detailed_formatter = logging.Formatter(
-        '[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    file_handler.setFormatter(detailed_formatter)
-    console_handler.setFormatter(detailed_formatter)
-    
-    bypass_logger.addHandler(file_handler)
-    bypass_logger.addHandler(console_handler)
 
 
 # 1. 代理插件生成逻辑 (处理带账号密码的代理)
@@ -316,6 +300,10 @@ def run_pre_logic(account):
         
         total_duration = time.time() - start_time
         bypass_logger.info(f"========== 过盾流程结束 (总耗时: {total_duration:.2f}秒) ==========")
+
+
+# 过盾相关功能已移至 bypass.py 模块
+# 使用 from serverbot.bypass import run_pre_logic_capsolver 导入
 
 def parse_proxy(raw_url):
     """解析工具函数"""
