@@ -411,10 +411,10 @@ def redeem_bonus_task(target_code, message_received_time=None):
     )
     logger.info(f"📝 创建新的推送记录 ID: {code_record.id} | 代码: {target_code} | 时间: {code_record.created_at}")
 
-    unique_ports = accounts.exclude(proxy__isnull=True).values('proxy_id').distinct().count()
-    max_workers = max(unique_ports, 10)
+    # 最大线程数 = 激活的账号数
+    max_workers = len(accounts)
 
-    logger.info(f"🔥 开始抢码任务: {target_code} | 并发线程: {len(accounts)} | 推送记录ID: {code_record.id}")
+    logger.info(f"🔥 开始抢码任务: {target_code} | 并发线程: {len(accounts)} | 最大线程数: {max_workers} | 推送记录ID: {code_record.id}")
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         for account in accounts:
