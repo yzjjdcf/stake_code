@@ -382,14 +382,14 @@ async def parse_code_stakecom_daily_drops(event, client):
                     # 下载视频（不指定文件路径，让 Telethon 自动处理文件名和扩展名）
                     logger.info("   开始下载视频...")
                     
-                    # 尝试下载，最多重试3次
+                    # 【优化】尝试下载，最多重试2次（减少重试次数，加快失败响应）
                     downloaded_path = None
-                    max_retries = 3
+                    max_retries = 2  # 从3次减少到2次
                     last_error = None
                     
                     for attempt in range(1, max_retries + 1):
                         try:
-                            logger.info(f"   下载尝试 {attempt}/{max_retries}...")
+                            logger.debug(f"   下载尝试 {attempt}/{max_retries}...")
                             # 明确传入 event.message 或 event.media，而不是直接传入 event
                             # 这对于复杂消息（转发消息、相册等）更可靠
                             media_to_download = event.message if hasattr(event, 'message') else event.media
@@ -403,19 +403,19 @@ async def parse_code_stakecom_daily_drops(event, client):
                             )
                             
                             if downloaded_path:
-                                logger.info(f"   视频下载完成: {downloaded_path}")
+                                logger.info(f"   ✅ 视频下载完成: {downloaded_path}")
                                 video_path = downloaded_path  # 使用实际下载的路径
                                 break
                             else:
                                 logger.warning(f"   下载尝试 {attempt} 返回 None")
                                 if attempt < max_retries:
-                                    await asyncio.sleep(1)  # 等待1秒后重试
+                                    await asyncio.sleep(0.5)  # 【优化】从1秒减少到0.5秒
                         except Exception as download_error:
                             last_error = download_error
                             logger.error(f"   下载尝试 {attempt} 出错: {download_error}")
                             if attempt < max_retries:
-                                logger.info(f"   等待1秒后重试...")
-                                await asyncio.sleep(1)
+                                logger.debug(f"   等待0.5秒后重试...")
+                                await asyncio.sleep(0.5)  # 【优化】从1秒减少到0.5秒
                             else:
                                 raise  # 最后一次尝试失败，抛出异常
                     
@@ -609,9 +609,39 @@ def _recognize_code_from_image_sync(image_path, api_key, api_url, model):
             logger.warning("   未配置 OPENAI_API_KEY，无法使用 ChatGPT 识别")
             return None
         
-        # 读取图片并编码为 base64
-        with open(image_path, 'rb') as f:
-            image_data = base64.b64encode(f.read()).decode('utf-8')
+        # 【优化】压缩图片以减少传输时间和API处理时间
+        try:
+            from PIL import Image
+            import io
+            
+            # 读取原始图片
+            with open(image_path, 'rb') as f:
+                img = Image.open(io.BytesIO(f.read()))
+            
+            # 如果图片太大，进行压缩（保持宽高比）
+            max_size = 1024  # 最大宽度或高度
+            if img.width > max_size or img.height > max_size:
+                ratio = min(max_size / img.width, max_size / img.height)
+                new_width = int(img.width * ratio)
+                new_height = int(img.height * ratio)
+                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                logger.debug(f"   图片已压缩: {img.width}x{img.height}")
+            
+            # 转换为 JPEG 格式（更小的文件大小）
+            output = io.BytesIO()
+            img.save(output, format='JPEG', quality=85, optimize=True)
+            image_bytes = output.getvalue()
+            image_data = base64.b64encode(image_bytes).decode('utf-8')
+            logger.debug(f"   图片已编码: {len(image_data)} 字符（base64）")
+        except ImportError:
+            # 如果没有 PIL，使用原始方法
+            logger.debug("   未安装 Pillow，使用原始图片（未压缩）")
+            with open(image_path, 'rb') as f:
+                image_data = base64.b64encode(f.read()).decode('utf-8')
+        except Exception as e:
+            logger.warning(f"   图片压缩失败，使用原始图片: {e}")
+            with open(image_path, 'rb') as f:
+                image_data = base64.b64encode(f.read()).decode('utf-8')
         
         # 构建请求 payload
         payload = json.dumps({
@@ -642,9 +672,9 @@ def _recognize_code_from_image_sync(image_path, api_key, api_url, model):
             'Content-Type': 'application/json'
         }
         
-        # 发送请求
-        logger.info(f"   正在调用 ChatGPT API: {api_url}")
-        response = requests.post(api_url, headers=headers, data=payload, timeout=30)
+        # 【优化】发送请求（减少超时时间，因为图片已压缩）
+        logger.debug(f"   正在调用 ChatGPT API: {api_url}")
+        response = requests.post(api_url, headers=headers, data=payload, timeout=20)  # 从30秒减少到20秒
         
         # 检查响应状态
         if response.status_code != 200:
