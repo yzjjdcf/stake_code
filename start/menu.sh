@@ -30,10 +30,12 @@ show_menu() {
     echo ""
     echo -e "${BLUE}9)${NC} 运行数据库迁移"
     echo -e "${BLUE}10)${NC} 检查 Listener 状态"
+    echo -e "${BLUE}11)${NC} 校准服务器时间"
+    echo -e "${BLUE}12)${NC} 实时时间对比（每秒更新）"
     echo ""
     echo -e "${RED}0)${NC} 退出"
     echo ""
-    echo -n "请选择 [0-10]: "
+    echo -n "请选择 [0-12]: "
 }
 
 # 启动所有服务
@@ -146,6 +148,30 @@ check_listener() {
     read -p "按回车键继续..."
 }
 
+# 校准服务器时间
+sync_server_time() {
+    echo -e "${BLUE}🕐 校准服务器时间...${NC}"
+    if [ -f "$PROJECT_DIR/start/Linux时间同步工具.sh" ]; then
+        bash "$PROJECT_DIR/start/Linux时间同步工具.sh"
+    else
+        echo -e "${RED}⚠️  时间同步脚本不存在${NC}"
+        echo -e "${YELLOW}提示：请确保 start/Linux时间同步工具.sh 文件存在${NC}"
+    fi
+    echo ""
+    read -p "按回车键继续..."
+}
+
+# 实时时间对比
+realtime_time_compare() {
+    echo -e "${BLUE}🕐 启动实时时间对比工具...${NC}"
+    if [ -f "$PROJECT_DIR/start/实时时间对比.sh" ]; then
+        bash "$PROJECT_DIR/start/实时时间对比.sh"
+    else
+        echo -e "${RED}⚠️  实时时间对比脚本不存在${NC}"
+        read -p "按回车键继续..."
+    fi
+}
+
 # 主循环
 while true; do
     show_menu
@@ -180,6 +206,12 @@ while true; do
             ;;
         10)
             check_listener
+            ;;
+        11)
+            sync_server_time
+            ;;
+        12)
+            realtime_time_compare
             ;;
         0)
             echo -e "${GREEN}👋 再见！${NC}"

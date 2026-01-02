@@ -268,14 +268,28 @@ async def parse_code_stakecom_daily_drops(event, client):
         lines = text.split('\n')
         for line in lines:
             line = line.strip()
-            # 匹配 "- Code: stakecomxxxxx" 格式
-            match = re.search(r'- Code:\s*([a-z0-9]+)', line, re.IGNORECASE)
-            if match:
-                code = match.group(1).strip().lower()
-                # 验证代码格式（应该以 stakecom 开头，或者至少是小写字母和数字）
-                if re.match(r'^[a-z0-9]+$', code) and len(code) >= 10:
-                    logger.info(f"   从文本中提取代码: {code}")
-                    return code
+            # 跳过空行
+            if not line:
+                continue
+            
+            # 匹配 "- Code: stakecomxxxxx" 格式（支持多种变体）
+            # 模式1: - Code: stakecomxxxxx
+            # 模式2: Code: stakecomxxxxx (没有前面的 -)
+            patterns = [
+                r'- Code:\s*([a-z0-9]+)',  # 标准格式：- Code: stakecomxxxxx
+                r'Code:\s*([a-z0-9]+)',    # 简化格式：Code: stakecomxxxxx
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    code = match.group(1).strip().lower()
+                    # 验证代码格式（应该至少是小写字母和数字，长度至少10）
+                    if re.match(r'^[a-z0-9]+$', code) and len(code) >= 10:
+                        logger.info(f"   从文本中提取代码: {code} (匹配行: {line[:50]}...)")
+                        return code
+                    else:
+                        logger.debug(f"   匹配到代码但验证失败: {code} (长度: {len(code)})")
     
     # 如果没有从文本中找到，检查是否有视频
     if event.video or event.document:
@@ -720,6 +734,41 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+# 降低 Telethon 内部日志级别，过滤掉 "Got difference" 等内部消息
+# 这些消息是正常的，表示 Telegram 服务器发送了频道更新差异
+telethon_logger = logging.getLogger('telethon')
+telethon_logger.setLevel(logging.WARNING)  # 只显示 WARNING 及以上级别
+
+# 进一步过滤 telethon.network 模块的日志（通常包含 "Got difference" 消息）
+telethon_network_logger = logging.getLogger('telethon.network')
+telethon_network_logger.setLevel(logging.ERROR)  # 只显示 ERROR 及以上级别
+
+# 过滤 telethon.session 模块的日志
+telethon_session_logger = logging.getLogger('telethon.session')
+telethon_session_logger.setLevel(logging.WARNING)
+
+# 自定义日志过滤器：过滤 "Got difference" 等 Telethon 内部消息
+class TelethonFilter(logging.Filter):
+    """过滤 Telethon 内部日志消息"""
+    def filter(self, record):
+        # 过滤包含 "Got difference" 的消息
+        if "Got difference" in record.getMessage():
+            return False
+        # 过滤其他常见的 Telethon 内部消息
+        message = record.getMessage().lower()
+        if any(keyword in message for keyword in [
+            'got difference',
+            'updates too long',
+            'channel updates',
+            'difference too long'
+        ]):
+            return False
+        return True
+
+# 为所有 handler 添加过滤器
+for handler in logging.root.handlers:
+    handler.addFilter(TelethonFilter())
+
 # ================= 5. Telegram 配置 =================
 # 使用配置文件中的设置
 if TELEGRAM_PROXY:
@@ -765,6 +814,139 @@ client = TelegramClient(
 # 频道实体列表（在启动时解析）
 CHANNEL_ENTITIES = []
 
+# 连接状态标志
+is_connected = False
+reconnect_lock = asyncio.Lock()  # 防止并发重连
+last_heartbeat_time = None
+heartbeat_interval = 3  # 心跳检测间隔（秒）
+reconnect_delay = 5  # 重连延迟（秒）
+max_reconnect_attempts = 5  # 最大重连尝试次数
+
+async def heartbeat_check():
+    """
+    心跳检测任务：定期检查 Telegram 连接状态
+    """
+    global is_connected, last_heartbeat_time
+    
+    while True:
+        try:
+            await asyncio.sleep(heartbeat_interval)
+            
+            # 检查连接状态
+            if client.is_connected():
+                if not is_connected:
+                    logger.info("✅ Telegram 连接已恢复")
+                    is_connected = True
+                last_heartbeat_time = asyncio.get_event_loop().time()
+                logger.info(f"💓 心跳检测：连接正常（间隔 {heartbeat_interval} 秒）")
+            else:
+                if is_connected:
+                    logger.warning("⚠️  Telegram 连接已断开（心跳检测）")
+                    is_connected = False
+                # 触发重连
+                await attempt_reconnect()
+                
+        except Exception as e:
+            logger.error(f"❌ 心跳检测出错: {e}", exc_info=True)
+            is_connected = False
+            await attempt_reconnect()
+
+async def attempt_reconnect():
+    """
+    尝试重新连接 Telegram
+    """
+    global is_connected
+    
+    # 使用锁防止并发重连
+    if reconnect_lock.locked():
+        logger.debug("   重连已在进行中，跳过...")
+        return
+    
+    async with reconnect_lock:
+        if client.is_connected():
+            logger.debug("   连接已恢复，无需重连")
+            is_connected = True
+            return
+        
+        logger.warning("🔄 开始尝试重新连接 Telegram...")
+        
+        for attempt in range(1, max_reconnect_attempts + 1):
+            try:
+                logger.info(f"   重连尝试 {attempt}/{max_reconnect_attempts}...")
+                
+                # 如果已连接，先断开
+                if client.is_connected():
+                    await client.disconnect()
+                
+                # 等待一段时间后重连
+                await asyncio.sleep(reconnect_delay)
+                
+                # 重新连接
+                await client.connect()
+                
+                # 验证连接
+                if client.is_connected():
+                    logger.info("✅ Telegram 重连成功")
+                    is_connected = True
+                    
+                    # 重新验证频道
+                    await revalidate_channels()
+                    return
+                else:
+                    logger.warning(f"   重连尝试 {attempt} 失败：连接状态为 False")
+                    
+            except Exception as e:
+                logger.error(f"   重连尝试 {attempt} 出错: {e}")
+                if attempt < max_reconnect_attempts:
+                    await asyncio.sleep(reconnect_delay * attempt)  # 递增延迟
+                else:
+                    logger.error(f"❌ 达到最大重连次数 ({max_reconnect_attempts})，停止重连")
+                    logger.error("   请检查网络连接和 Telegram 配置")
+                    is_connected = False
+
+async def revalidate_channels():
+    """
+    重新验证频道（重连后需要重新验证）
+    """
+    global CHANNEL_ENTITIES
+    
+    logger.info("🔄 重新验证频道...")
+    CHANNEL_ENTITIES.clear()
+    
+    CHANNEL_LIST = list(TELEGRAM_CHANNELS.keys())
+    failed_channels = []
+    
+    for channel_key in CHANNEL_LIST:
+        try:
+            entity = await client.get_entity(channel_key)
+            channel_title = entity.title if hasattr(entity, 'title') else 'N/A'
+            channel_id = entity.id if hasattr(entity, 'id') else 'N/A'
+            parser_name = TELEGRAM_CHANNELS.get(channel_key, 'default_parser')
+            CHANNEL_ENTITIES.append(entity)
+            logger.info(f"✅ 频道验证成功: {channel_title} ({channel_key}) | ID: {channel_id} | 解析器: {parser_name}")
+        except Exception as e:
+            error_msg = str(e)
+            failed_channels.append(channel_key)
+            logger.warning(f"⚠️ 频道验证失败: {channel_key} - {error_msg}")
+    
+    if failed_channels:
+        logger.warning(f"⚠️ 共有 {len(failed_channels)} 个频道验证失败")
+    else:
+        logger.info(f"✅ 成功重新验证 {len(CHANNEL_ENTITIES)} 个频道")
+
+# 监听连接断开事件
+@client.on(events.Raw)
+async def handle_raw_event(event):
+    """
+    处理原始事件，用于检测连接状态
+    """
+    global is_connected
+    
+    # 某些事件类型可能表示连接问题
+    if hasattr(event, 'CONSTRUCTOR_ID'):
+        # 可以在这里添加特定的事件处理
+        pass
+
 @client.on(events.NewMessage())
 async def my_event_handler(event):
     try:
@@ -781,7 +963,7 @@ async def my_event_handler(event):
             channel_username = getattr(entity, 'username', None)
             channel_title = getattr(entity, 'title', None)
             
-            # 检查是否在监听列表中
+            # 方法1: 检查是否在 CHANNEL_ENTITIES 中（已验证的频道）
             for ch_entity in CHANNEL_ENTITIES:
                 if hasattr(ch_entity, 'id') and ch_entity.id == chat_id:
                     is_target_channel = True
@@ -790,11 +972,28 @@ async def my_event_handler(event):
                     if ch_entity.username == channel_username or ch_entity.username.lstrip('@') == channel_username.lstrip('@'):
                         is_target_channel = True
                         break
-        except:
-            pass
+            
+            # 方法2: 如果不在 CHANNEL_ENTITIES 中，直接检查配置（即使验证失败也尝试处理）
+            if not is_target_channel:
+                # 通过用户名匹配配置
+                if channel_username:
+                    username_clean = channel_username.lstrip('@')
+                    if username_clean in TELEGRAM_CHANNELS:
+                        is_target_channel = True
+                        logger.info(f"   ℹ️ 频道 {username_clean} 在配置中，但未在启动时验证成功，仍将处理消息")
+                
+                # 通过 ID 匹配配置
+                if not is_target_channel and str(chat_id) in TELEGRAM_CHANNELS:
+                    is_target_channel = True
+                    logger.info(f"   ℹ️ 频道 ID {chat_id} 在配置中，但未在启动时验证成功，仍将处理消息")
+                    
+        except Exception as e:
+            logger.debug(f"   获取频道信息失败: {e}")
         
-        # 如果不是目标频道，跳过处理
+        # 如果不是目标频道，记录调试信息并跳过处理
         if not is_target_channel:
+            # 记录调试信息：收到非目标频道的消息
+            logger.debug(f"   收到非目标频道消息: {channel_title or 'N/A'} (ID: {chat_id}, 用户名: {channel_username or 'N/A'})")
             return
         
         # 确定使用哪个解析器
@@ -886,10 +1085,22 @@ async def my_event_handler(event):
         # 记录收到消息的时间戳（用于计算总耗时）
         import time
         message_received_time = time.perf_counter()
+        
+        # 检查是否是测试频道，如果是则只发给特定账号
+        filter_username = None
+        # 检查频道是否是 stake_cn_chat_room（通过 channel_key 或 channel_username 或 chat_id）
+        is_test_channel = (
+            channel_key == 'stake_cn_chat_room' or 
+            (channel_username and channel_username.lstrip('@') == 'stake_cn_chat_room') or
+            str(chat_id) == '-1003315955015'  # stake_cn_chat_room 的频道 ID
+        )
+        if is_test_channel:
+            filter_username = '测试'
+            logger.info(f"   🧪 测试频道模式：仅发送给账号名为 '{filter_username}' 的账号")
 
         # --- 修复核心：使用 asyncio.to_thread 运行同步函数 ---
         # 这样就不会触发 SynchronousOnlyOperation 错误
-        await asyncio.to_thread(redeem_bonus_task, code, message_received_time)
+        await asyncio.to_thread(redeem_bonus_task, code, message_received_time, filter_username)
         logger.info(f"✅ 任务线程已结束: {code}")
         logger.info("=" * 50)
     except Exception as e:
@@ -946,9 +1157,38 @@ async def main():
         
         logger.info(f"✅ 成功加载 {len(CHANNEL_ENTITIES)} 个频道实体")
         
+        # 标记为已连接
+        is_connected = True
+        last_heartbeat_time = asyncio.get_event_loop().time()
+        
+        # 启动心跳检测任务
+        logger.info("💓 启动心跳检测任务（每 {} 秒检查一次）...".format(heartbeat_interval))
+        heartbeat_task = asyncio.create_task(heartbeat_check())
+        
         logger.info("🎧 开始监听消息...")
         logger.info("   等待新消息中...")
-        await client.run_until_disconnected()
+        
+        try:
+            await client.run_until_disconnected()
+        except KeyboardInterrupt:
+            logger.info("   收到停止信号...")
+            raise
+        except Exception as e:
+            logger.error(f"❌ 连接异常: {e}", exc_info=True)
+            is_connected = False
+            # 尝试重连
+            await attempt_reconnect()
+            # 如果重连成功，继续运行
+            if client.is_connected():
+                await client.run_until_disconnected()
+        finally:
+            # 停止心跳检测
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("💓 心跳检测任务已停止")
     except ConnectionError as e:
         logger.error(f"❌ 连接失败: {e}")
         if TELEGRAM_PROXY:

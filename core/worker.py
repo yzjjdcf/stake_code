@@ -389,7 +389,7 @@ def handle_response_result(response, account, log_port, location, elapsed_ms, to
     except Exception as e:
         logger.error(f"⚠️ 记录数据库失败: {e}")
 
-def redeem_bonus_task(target_code, message_received_time=None):
+def redeem_bonus_task(target_code, message_received_time=None, filter_username=None):
     """
     领取红包代码任务
     收到码直接执行请求，不检查是否有记录
@@ -398,9 +398,19 @@ def redeem_bonus_task(target_code, message_received_time=None):
     Args:
         target_code: 目标代码
         message_received_time: Telegram 收到消息的时间戳（time.perf_counter()），用于计算总耗时
+        filter_username: 如果指定，只使用该用户名的账号（用于测试频道）
     """
+    # 获取激活的账号
     accounts = StakeAccount.objects.filter(is_active=True)
-    if not accounts.exists():
+    
+    # 如果指定了过滤用户名，只使用该用户名的账号
+    if filter_username:
+        accounts = accounts.filter(username=filter_username)
+        logger.info(f"🧪 测试模式：仅使用账号名为 '{filter_username}' 的账号")
+        if not accounts.exists():
+            logger.warning(f"⚠️ 没有找到账号名为 '{filter_username}' 的激活账号")
+            return
+    elif not accounts.exists():
         logger.warning("⚠️ 没有激活的账号")
         return
 
