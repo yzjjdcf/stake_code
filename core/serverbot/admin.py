@@ -375,13 +375,11 @@ class CodeRecordAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return request.user.is_superuser
     list_display = (
-        'code',
-        'get_status_display_colored',
-        'actual_value',
-        'get_statistics',
-        'get_claim_details_link',
-        'created_at',
-        'updated_at'
+        'code',  # 红包代码
+        'get_is_valid_status_display',  # 是否有效码（状态）
+        'get_statistics',  # 统计信息
+        'get_claim_details_link',  # 领取明细
+        'created_at',  # 创建时间
     )
     list_filter = ('status', 'created_at', 'is_timeout_trigger')
     search_fields = ('code',)
@@ -406,21 +404,56 @@ class CodeRecordAdmin(admin.ModelAdmin):
         }),
     )
     
-    def get_status_display_colored(self, obj):
-        """带颜色的状态显示"""
-        colors = {
-            'valid': '#28a745',      # 绿色
-            'invalid': '#dc3545',     # 红色
-            'expired': '#ffc107',     # 黄色
-            'claimed': '#6c757d',    # 灰色
-            'unknown': '#17a2b8',     # 蓝色
-        }
-        status_display = obj.get_status_display()
-        color = colors.get(obj.status, '#000')
-        return mark_safe(
-            f'<span style="color: {color}; font-weight: bold;">{status_display}</span>'
-        )
-    get_status_display_colored.short_description = '状态'
+    def get_is_valid_status_display(self, obj):
+        """
+        显示代码是否有效，以及有效的子状态
+        有效：可用、次数领取完、流水不够
+        无效：未找到、403错误、其他错误
+        """
+        # 获取所有相关的 ClaimRecord
+        claim_records = obj.claim_records.all()
+        
+        if not claim_records.exists():
+            # 没有记录，显示未知
+            return mark_safe('<span style="color: #6c757d; font-weight: bold;">❓ 未知</span>')
+        
+        # 统计各种状态
+        has_success = claim_records.filter(status='success').exists()
+        has_inactive = claim_records.filter(status='inactive').exists()
+        has_already_claimed = claim_records.filter(status='already_claimed').exists()
+        has_weekly_wager = claim_records.filter(status='weekly_wager_requirement').exists()
+        has_not_found = claim_records.filter(status='not_found').exists()
+        has_error_403 = claim_records.filter(status='error_403').exists()
+        has_error = claim_records.filter(status='error').exists()
+        
+        # 判断是否有效：只要有 success、inactive、already_claimed、weekly_wager_requirement 中的任意一个，就认为有效
+        is_valid = has_success or has_inactive or has_already_claimed or has_weekly_wager
+        
+        if is_valid:
+            # 有效，显示子状态
+            sub_statuses = []
+            if has_success:
+                sub_statuses.append('<span style="color: #28a745;">✅ 可用</span>')
+            if has_inactive or has_already_claimed:
+                sub_statuses.append('<span style="color: #ffc107;">⌛ 次数领取完</span>')
+            if has_weekly_wager:
+                sub_statuses.append('<span style="color: #17a2b8;">📋 流水不够</span>')
+            
+            # 去重并组合显示
+            unique_statuses = list(dict.fromkeys(sub_statuses))  # 保持顺序的去重
+            status_html = ' | '.join(unique_statuses)
+            
+            return mark_safe(
+                f'<div style="font-weight: bold;">'
+                f'<span style="color: #28a745;">✅ 有效</span><br>'
+                f'<span style="font-size: 11px; font-weight: normal;">{status_html}</span>'
+                f'</div>'
+            )
+        else:
+            # 无效
+            return mark_safe('<span style="color: #dc3545; font-weight: bold;">❌ 无效</span>')
+    
+    get_is_valid_status_display.short_description = '是否有效码'
     
     def get_statistics(self, obj):
         """显示统计信息"""
@@ -633,7 +666,7 @@ class ClaimRecordAdmin(admin.ModelAdmin):
     def get_search_fields(self, request):
         """禁用默认搜索框，使用自定义的多搜索框"""
         return []  # 返回空列表，禁用默认搜索框
-    readonly_fields = ('created_at', 'get_response_body_formatted')
+    readonly_fields = ('created_at', 'get_query_response_body_formatted', 'get_claim_response_body_formatted')
     
     fieldsets = (
         ('基本信息', {
@@ -642,9 +675,13 @@ class ClaimRecordAdmin(admin.ModelAdmin):
         ('结果信息', {
             'fields': ('bonus_value', 'response_time_ms', 'is_retry', 'error_message')
         }),
-        ('响应信息', {
-            'fields': ('get_response_body_formatted',),
-            'description': '完整的API响应内容（JSON格式）'
+        ('查询接口响应', {
+            'fields': ('get_query_response_body_formatted',),
+            'description': '查询代码是否可用的API响应内容（第一步接口）'
+        }),
+        ('领取接口响应', {
+            'fields': ('get_claim_response_body_formatted',),
+            'description': '领取代码的API响应内容（第二步接口，仅当代码可用时才有）'
         }),
         ('时间信息', {
             'fields': ('created_at',)
@@ -671,32 +708,37 @@ class ClaimRecordAdmin(admin.ModelAdmin):
     
     def get_response_body_preview(self, obj):
         """在列表页显示响应体预览"""
-        if not obj.response_body:
+        # 优先显示领取接口的响应体（如果有），否则显示查询接口的响应体
+        response_body = obj.claim_response_body if obj.claim_response_body else obj.query_response_body
+        if not response_body:
             return mark_safe('<span style="color: #999;">无响应体</span>')
         
         # 截取前100个字符作为预览
-        preview = obj.response_body[:100]
-        if len(obj.response_body) > 100:
+        preview = response_body[:100]
+        if len(response_body) > 100:
             preview += '...'
         
         # 转义 HTML 特殊字符
         import html
         preview = html.escape(preview)
         
+        # 显示来源标识
+        source = "领取接口" if obj.claim_response_body else "查询接口"
+        
         return mark_safe(
             f'<span style="font-family: monospace; font-size: 11px; color: #666;" '
-            f'title="点击详情页查看完整内容">{preview}</span>'
+            f'title="点击详情页查看完整内容">[{source}] {preview}</span>'
         )
     get_response_body_preview.short_description = '响应体预览'
     
-    def get_response_body_formatted(self, obj):
-        """在详情页格式化显示响应体"""
-        if not obj.response_body:
-            return mark_safe('<span style="color: #999;">无响应体</span>')
+    def get_query_response_body_formatted(self, obj):
+        """在详情页格式化显示查询接口响应体"""
+        if not obj.query_response_body:
+            return mark_safe('<span style="color: #999;">无查询接口响应体</span>')
         
         try:
             # 尝试解析为 JSON 并格式化
-            response_data = json.loads(obj.response_body)
+            response_data = json.loads(obj.query_response_body)
             formatted_json = json.dumps(response_data, ensure_ascii=False, indent=2)
             # 转义 HTML 特殊字符
             import html
@@ -709,13 +751,41 @@ class ClaimRecordAdmin(admin.ModelAdmin):
         except (json.JSONDecodeError, TypeError):
             # 如果不是 JSON，直接显示文本
             import html
-            escaped_text = html.escape(obj.response_body)
+            escaped_text = html.escape(obj.query_response_body)
             return mark_safe(
                 f'<pre style="background: #f5f5f5; padding: 15px; border-radius: 5px; '
                 f'overflow-x: auto; font-size: 12px; line-height: 1.5; max-height: 500px; '
                 f'overflow-y: auto; white-space: pre-wrap;">{escaped_text}</pre>'
             )
-    get_response_body_formatted.short_description = '响应体'
+    get_query_response_body_formatted.short_description = '查询接口响应体'
+    
+    def get_claim_response_body_formatted(self, obj):
+        """在详情页格式化显示领取接口响应体"""
+        if not obj.claim_response_body:
+            return mark_safe('<span style="color: #999;">无领取接口响应体（未走到第二步）</span>')
+        
+        try:
+            # 尝试解析为 JSON 并格式化
+            response_data = json.loads(obj.claim_response_body)
+            formatted_json = json.dumps(response_data, ensure_ascii=False, indent=2)
+            # 转义 HTML 特殊字符
+            import html
+            formatted_json = html.escape(formatted_json)
+            return mark_safe(
+                f'<pre style="background: #f5f5f5; padding: 15px; border-radius: 5px; '
+                f'overflow-x: auto; font-size: 12px; line-height: 1.5; max-height: 500px; '
+                f'overflow-y: auto;">{formatted_json}</pre>'
+            )
+        except (json.JSONDecodeError, TypeError):
+            # 如果不是 JSON，直接显示文本
+            import html
+            escaped_text = html.escape(obj.claim_response_body)
+            return mark_safe(
+                f'<pre style="background: #f5f5f5; padding: 15px; border-radius: 5px; '
+                f'overflow-x: auto; font-size: 12px; line-height: 1.5; max-height: 500px; '
+                f'overflow-y: auto; white-space: pre-wrap;">{escaped_text}</pre>'
+            )
+    get_claim_response_body_formatted.short_description = '领取接口响应体'
     
     def changelist_view(self, request, extra_context=None):
         """重写 changelist_view 以处理自定义搜索和计算总计"""

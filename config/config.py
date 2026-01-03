@@ -34,9 +34,9 @@ TELEGRAM_API_HASH = 'bb23c410c63a820d7c4209e0606d4aea'
 TELEGRAM_CHANNELS = {
     'HighRollersStake': 'high_rollers_parser',  # 频道1：HighRollersStake
     'RainsTEAM': 'rains_team_parser',  # 频道2：RainsTEAM（复杂消息格式，无空格代码）
-    # 'stakeimgantengofficial': 'rains_team_parser',  # 频道3：Stake.com - Challenge Info & Bonus Drop（使用 rains_team_parser）
-    # '-1002181343631': 'daily_code_parser',  # 频道4：Daily Code 频道（使用 daily_code_parser）
-    'StakecomDailyDrops': 'stakecom_daily_drops_parser',  # 频道5：Stake.com - Daily Drops（支持视频和文本）
+    'stakeimgantengofficial': 'rains_team_parser',  # 频道3：Stake.com - Challenge Info & Bonus Drop（使用 rains_team_parser）
+    # 'Stakelivechallenges': 'rains_team_parser',  # 频道4：Daily Code 频道（使用 daily_code_parser）
+    # 'StakecomDailyDrops': 'stakecom_daily_drops_parser',  # 频道5：Stake.com - Daily Drops（支持视频和文本）
     'stake_cn_chat_room': 'rains_team_parser',  # 频道6：测试频道（使用 stakecom_daily_drops_parser 进行测试）
     # '-1003315955015': 'stakecom_daily_drops_parser',  # 频道6的ID（stake中文避风港），确保能匹配到
 }
@@ -172,3 +172,11 @@ OPENAI_API_BASE_URL = 'https://api.gpt.ge/v1/chat/completions'
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', 'sk-t9k1dFDN5BiApHUz63Ec585e880e4a6cAb64421bDc2e7650')  # 优先从环境变量读取，如果没有则使用默认值
 # 使用的模型（必须是支持图片分析的模型）
 OPENAI_MODEL = 'gpt-4o'  # 或使用其他支持图片分析的模型
+
+# ==================== Turnstile 配置 ====================
+# Cloudflare Turnstile 配置（用于领取代码时的验证）
+# Site Key（需要从实际页面获取，可以通过浏览器开发者工具查看）
+# 在 stake.com 的页面上，找到 Turnstile widget 的 site-key
+TURNSTILE_SITE_KEY = os.getenv('TURNSTILE_SITE_KEY', '0x4AAAAAAAGD4gMGOTFnvupz')  # 优先从环境变量读取，如果没有则使用空字符串（需要手动配置）
+# Site URL（领取代码时的页面 URL）
+TURNSTILE_SITE_URL = 'https://stake.com/'  # 默认值，可以根据需要修改

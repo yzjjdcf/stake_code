@@ -170,15 +170,17 @@ class ClaimRecord(models.Model):
     code_record = models.ForeignKey(CodeRecord, on_delete=models.SET_NULL, null=True, related_name='claim_records', verbose_name="代码记录")
     code = models.CharField(max_length=100, verbose_name="红包代码", db_index=True)
     
-    # 状态：success(成功), failure(失败), error_403(403错误), not_found(找不到), inactive(code次数用尽), already_claimed(已领过), weekly_wager_requirement(需要周投注要求)
+    # 状态：有效代码的详细状态 + 无效状态
+    # 有效：次数领取完、已领过、流水不够、领取成功、领取失败
+    # 无效：找不到、403错误、其他错误
     STATUS_CHOICES = [
-        ('success', '✅ 成功'),
-        ('failure', '❌ 失败'),
-        ('error_403', '⚠️ 403错误'),
-        ('not_found', '❌ 找不到'),
-        ('inactive', '⌛ code次数用尽'),
-        ('weekly_wager_requirement', '📋 需要周投注要求'),
+        ('claim_success', '✅ 领取成功'),
+        ('claim_failure', '❌ 领取失败'),
+        ('inactive', '⌛ 次数领取完'),
         ('already_claimed', '🔁 已领过'),
+        ('weekly_wager_requirement', '📋 流水不够'),
+        ('not_found', '❌ 找不到'),
+        ('error_403', '⚠️ 403错误'),
         ('error', '❓ 其他错误'),
     ]
     status = models.CharField(max_length=30, choices=STATUS_CHOICES, verbose_name="状态")
@@ -187,7 +189,8 @@ class ClaimRecord(models.Model):
     response_time_ms = models.IntegerField(null=True, verbose_name="响应时间(ms)")
     is_retry = models.BooleanField(default=False, verbose_name="是否重试")
     error_message = models.TextField(null=True, blank=True, verbose_name="错误信息")
-    response_body = models.TextField(null=True, blank=True, verbose_name="响应体", help_text="记录完整的API响应内容")
+    query_response_body = models.TextField(null=True, blank=True, verbose_name="查询接口响应体", help_text="记录查询代码是否可用的API响应内容（第一步接口）")
+    claim_response_body = models.TextField(null=True, blank=True, verbose_name="领取接口响应体", help_text="记录领取代码的API响应内容（第二步接口，仅当代码可用时才有）")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
     
     class Meta:

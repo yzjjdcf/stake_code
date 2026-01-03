@@ -127,6 +127,143 @@ def parse_proxy_to_capsolver_format(proxy_address: str, use_format_2: bool = Fal
         return None
 
 
+def get_turnstile_token(account, site_key=None, site_url=None, max_wait=60):
+    """
+    通过 Capsolver API 获取 Turnstile token
+    
+    Args:
+        account: 账号对象（用于日志记录）
+        site_key: Turnstile site key（如果为 None，使用默认值）
+        site_url: 目标网站 URL（如果为 None，使用默认值）
+        max_wait: 最大等待时间（秒）
+    
+    Returns:
+        str: Turnstile token，如果获取失败则返回 None
+    """
+    # 记录开始时间
+    start_time = time.time()
+    
+    try:
+        # 获取 Capsolver API Key
+        capsolver_api_key = os.getenv('CAPSOLVER_API_KEY', 'CAP-5B4B10EB54FE9A54BF32F113839720F39D1F6EC069121A3E25D5B205BDF076E7')
+        if not capsolver_api_key:
+            bypass_logger.error(f"❌ [{account.username}] 未设置 CAPSOLVER_API_KEY 环境变量")
+            return None
+        
+        capsolver_api_url = 'https://api.capsolver.com'
+        
+        # 默认值（如果未提供）
+        if not site_key:
+            # 从配置文件中读取
+            site_key = getattr(config_module, 'TURNSTILE_SITE_KEY', '')
+            if not site_key:
+                bypass_logger.error(f"❌ [{account.username}] 未配置 TURNSTILE_SITE_KEY，无法获取 Turnstile token")
+                bypass_logger.error(f"   请在 config/config.py 中设置 TURNSTILE_SITE_KEY，或设置环境变量 TURNSTILE_SITE_KEY")
+                return None
+        
+        if not site_url:
+            site_url = getattr(config_module, 'TURNSTILE_SITE_URL', 'https://stake.com/')
+        
+        bypass_logger.info(f"🔐 [{account.username}] 开始获取 Turnstile token...")
+        bypass_logger.info(f"   Site Key: {site_key[:20]}...")
+        bypass_logger.info(f"   Site URL: {site_url}")
+        
+        # 创建任务
+        payload = {
+            "clientKey": capsolver_api_key,
+            "task": {
+                "type": "AntiTurnstileTaskProxyLess",
+                "websiteKey": site_key,
+                "websiteURL": site_url,
+                "metadata": {
+                    "action": ""  # optional
+                }
+            }
+        }
+        
+        # 发送创建任务请求
+        session = requests.Session()
+        session.headers.update({'Content-Type': 'application/json'})
+        session.proxies = {}  # 确保不使用代理访问 Capsolver API
+        
+        bypass_logger.info(f"📤 [{account.username}] 创建 Turnstile 任务...")
+        res = session.post(f"{capsolver_api_url}/createTask", json=payload, timeout=30)
+        res.raise_for_status()
+        resp = res.json()
+        
+        task_id = resp.get("taskId")
+        if not task_id:
+            elapsed = time.time() - start_time
+            error_msg = resp.get("errorDescription", "未知错误")
+            bypass_logger.error(f"❌ [{account.username}] 创建 Turnstile 任务失败: {error_msg}")
+            bypass_logger.error(f"   ⏱️  耗时: {elapsed:.2f} 秒（从发起请求到创建任务失败）")
+            bypass_logger.error(f"   响应: {res.text}")
+            return None
+        
+        bypass_logger.info(f"✅ [{account.username}] 任务创建成功，任务 ID: {task_id}")
+        bypass_logger.info(f"⏳ [{account.username}] 等待任务完成（最大等待 {max_wait} 秒）...")
+        
+        # 轮询获取结果
+        wait_start = time.time()
+        check_count = 0
+        
+        while True:
+            time.sleep(1)  # 延迟 1 秒
+            check_count += 1
+            
+            payload = {"clientKey": capsolver_api_key, "taskId": task_id}
+            res = session.post(f"{capsolver_api_url}/getTaskResult", json=payload, timeout=30)
+            res.raise_for_status()
+            resp = res.json()
+            
+            status = resp.get("status")
+            
+            if status == "ready":
+                token = resp.get("solution", {}).get('token')
+                if token:
+                    # 计算总耗时（从函数开始到获取到 token）
+                    total_elapsed = time.time() - start_time
+                    # 计算等待耗时（从开始轮询到获取到 token）
+                    wait_elapsed = time.time() - wait_start
+                    bypass_logger.info(f"✅ [{account.username}] Turnstile token 获取成功")
+                    bypass_logger.info(f"   ⏱️  总耗时: {total_elapsed:.2f} 秒（从发起请求到获取到 token）")
+                    bypass_logger.info(f"   ⏱️  等待耗时: {wait_elapsed:.2f} 秒（从开始轮询到获取到 token）")
+                    bypass_logger.debug(f"   Token: {token[:50]}...")
+                    return token
+                else:
+                    total_elapsed = time.time() - start_time
+                    bypass_logger.error(f"❌ [{account.username}] 任务完成但未获取到 token")
+                    bypass_logger.error(f"   ⏱️  总耗时: {total_elapsed:.2f} 秒（从发起请求到任务完成但无 token）")
+                    bypass_logger.error(f"   响应: {res.text}")
+                    return None
+            
+            if status == "failed" or resp.get("errorId"):
+                total_elapsed = time.time() - start_time
+                error_msg = resp.get("errorDescription", "未知错误")
+                bypass_logger.error(f"❌ [{account.username}] Turnstile 任务失败: {error_msg}")
+                bypass_logger.error(f"   ⏱️  总耗时: {total_elapsed:.2f} 秒（从发起请求到任务失败）")
+                bypass_logger.error(f"   响应: {res.text}")
+                return None
+            
+            # 检查超时
+            elapsed = time.time() - wait_start
+            if elapsed > max_wait:
+                total_elapsed = time.time() - start_time
+                bypass_logger.error(f"❌ [{account.username}] Turnstile 任务超时（超过 {max_wait} 秒）")
+                bypass_logger.error(f"   ⏱️  总耗时: {total_elapsed:.2f} 秒（从发起请求到超时）")
+                return None
+            
+            # 每 5 次检查输出一次日志
+            if check_count % 5 == 0:
+                bypass_logger.info(f"⏳ [{account.username}] 等待中... ({int(elapsed)}/{max_wait} 秒)")
+        
+    except Exception as e:
+        total_elapsed = time.time() - start_time
+        bypass_logger.error(f"❌ [{account.username}] 获取 Turnstile token 时发生异常: {e}", exc_info=True)
+        bypass_logger.error(f"   ⏱️  总耗时: {total_elapsed:.2f} 秒（从发起请求到异常）")
+        return None
+
+
 def run_pre_logic_capsolver(account, target_code=None):
     """
     使用 Capsolver API 处理过盾逻辑（不使用浏览器）

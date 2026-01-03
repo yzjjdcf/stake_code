@@ -255,15 +255,216 @@ async def parse_code_stakecom_daily_drops(event, client):
     """
     解析 StakecomDailyDrops 频道的代码
     支持两种格式：
-    1. 文本格式：查找 "- Code: stakecomxxxxx" 格式
-    2. 视频格式：下载视频，提取倒数第10帧，使用 ChatGPT 识别代码
+    1. 视频格式：下载视频，提取倒数第10帧，使用 ChatGPT 识别代码（优先）
+    2. 文本格式：查找 "- Code: stakecomxxxxx" 格式（如果没有视频）
+    
+    逻辑：先判断是否有视频，如果有视频走视频解析，如果没有视频走文本解析
     """
     import tempfile
     
-    # 首先尝试从文本中提取
+    # ================= 第一步：先判断是否有视频 =================
+    has_video = False
+    if event.video or event.document:
+        # 检查是否是视频文件
+        if event.video:
+            has_video = True
+        elif event.document:
+            # 检查文档的 MIME 类型
+            mime_type = getattr(event.document, 'mime_type', '')
+            if mime_type and mime_type.startswith('video/'):
+                has_video = True
+    
+    # ================= 第二步：如果有视频，只走视频解析（不走文本解析）=================
+    if has_video:
+        logger.info("   检测到视频，开始视频解析流程（有视频时不解析文本）...")
+        try:
+            # 尝试获取视频地址和详细信息
+            try:
+                if event.media:
+                    # 尝试获取视频的详细信息
+                    if hasattr(event.media, 'document'):
+                            doc = event.media.document
+                            file_id = doc.id if hasattr(doc, 'id') else 'N/A'
+                            access_hash = doc.access_hash if hasattr(doc, 'access_hash') else 'N/A'
+                            file_name = getattr(doc, 'file_name', 'N/A')
+                            mime_type = getattr(doc, 'mime_type', 'N/A')
+                            file_size = getattr(doc, 'size', 'N/A')
+                            dc_id = getattr(doc, 'dc_id', 'N/A')
+                            
+                            logger.info(f"   视频信息:")
+                            logger.info(f"     - 文件 ID: {file_id}")
+                            logger.info(f"     - 访问哈希: {access_hash}")
+                            logger.info(f"     - 文件名: {file_name}")
+                            logger.info(f"     - MIME 类型: {mime_type}")
+                            logger.info(f"     - 文件大小: {file_size} 字节")
+                            logger.info(f"     - DC ID: {dc_id}")
+                            
+                            # Telegram 媒体文件通过 MTProto API 下载，不能直接通过 HTTP URL 访问
+                            if file_id != 'N/A' and access_hash != 'N/A':
+                                logger.info(f"     - 视频来源: Telegram DC{dc_id} 媒体服务器")
+                                logger.info(f"     - 下载方式: 通过 Telethon MTProto API 下载（需要认证）")
+                    elif hasattr(event.media, 'video'):
+                            video = event.media.video
+                            file_id = video.id if hasattr(video, 'id') else 'N/A'
+                            access_hash = video.access_hash if hasattr(video, 'access_hash') else 'N/A'
+                            duration = getattr(video, 'duration', 'N/A')
+                            dc_id = getattr(video, 'dc_id', 'N/A')
+                            
+                            logger.info(f"   视频信息:")
+                            logger.info(f"     - 文件 ID: {file_id}")
+                            logger.info(f"     - 访问哈希: {access_hash}")
+                            logger.info(f"     - 时长: {duration} 秒")
+                            logger.info(f"     - DC ID: {dc_id}")
+                            
+                            if file_id != 'N/A' and access_hash != 'N/A':
+                                logger.info(f"     - 视频来源: Telegram DC{dc_id} 媒体服务器")
+                                logger.info(f"     - 下载方式: 通过 Telethon MTProto API 下载（需要认证）")
+                    
+                    # 尝试获取消息的完整 URL（如果可能）
+                    try:
+                        entity = await event.get_chat()
+                        chat_username = getattr(entity, 'username', None)
+                        if chat_username:
+                            message_url = f"https://t.me/{chat_username}/{event.id}"
+                            logger.info(f"     - 消息链接: {message_url}")
+                    except Exception as e:
+                        logger.debug(f"   无法获取消息链接: {e}")
+            except Exception as e:
+                logger.debug(f"   获取视频信息时出错: {e}")
+            
+            # 创建临时目录
+            temp_dir = tempfile.mkdtemp()
+            
+            # 尝试获取原始文件名，如果没有则使用默认名称
+            original_filename = None
+            if event.media and hasattr(event.media, 'document'):
+                original_filename = getattr(event.media.document, 'file_name', None)
+            
+            # 如果原始文件名存在，使用它；否则让 Telethon 自动处理
+            if original_filename:
+                video_path = os.path.join(temp_dir, original_filename)
+            else:
+                # 不指定扩展名，让 Telethon 自动处理
+                video_path = os.path.join(temp_dir, 'video')
+            
+            logger.info(f"   视频将下载到: {video_path}")
+            
+            try:
+                # 下载视频（不指定文件路径，让 Telethon 自动处理文件名和扩展名）
+                logger.info("   开始下载视频...")
+                
+                # 【优化】尝试下载，最多重试2次（减少重试次数，加快失败响应）
+                downloaded_path = None
+                max_retries = 2  # 从3次减少到2次
+                last_error = None
+                
+                for attempt in range(1, max_retries + 1):
+                    try:
+                        logger.debug(f"   下载尝试 {attempt}/{max_retries}...")
+                        # 明确传入 event.message 或 event.media，而不是直接传入 event
+                        # 这对于复杂消息（转发消息、相册等）更可靠
+                        media_to_download = event.message if hasattr(event, 'message') else event.media
+                        if not media_to_download:
+                            media_to_download = event  # 如果都没有，回退到 event
+                        
+                        downloaded_path = await client.download_media(
+                            media_to_download, 
+                            file=temp_dir,
+                            progress_callback=None  # 可以添加进度回调
+                        )
+                        
+                        if downloaded_path:
+                            logger.info(f"   ✅ 视频下载完成: {downloaded_path}")
+                            video_path = downloaded_path  # 使用实际下载的路径
+                            break
+                        else:
+                            logger.warning(f"   下载尝试 {attempt} 返回 None")
+                            if attempt < max_retries:
+                                await asyncio.sleep(0.5)  # 【优化】从1秒减少到0.5秒
+                    except Exception as download_error:
+                        last_error = download_error
+                        logger.error(f"   下载尝试 {attempt} 出错: {download_error}")
+                        if attempt < max_retries:
+                            logger.debug(f"   等待0.5秒后重试...")
+                            await asyncio.sleep(0.5)  # 【优化】从1秒减少到0.5秒
+                        else:
+                            raise  # 最后一次尝试失败，抛出异常
+                
+                # 如果下载返回 None，直接报错
+                if not downloaded_path:
+                    logger.error("   视频下载失败: download_media 返回 None")
+                    if last_error:
+                        logger.error(f"   最后错误: {last_error}")
+                    logger.error(f"   临时目录路径: {temp_dir}")
+                    if os.path.exists(temp_dir):
+                        files_in_dir = os.listdir(temp_dir)
+                        logger.error(f"   临时目录内容: {files_in_dir}")
+                    return None
+                
+                # 确保 video_path 已设置
+                if not video_path:
+                    logger.error("   无法确定视频文件路径")
+                    return None
+                
+                # 检查文件是否存在和大小
+                if not os.path.exists(video_path):
+                    logger.error(f"   视频文件不存在: {video_path}")
+                    logger.error(f"   临时目录内容: {os.listdir(temp_dir) if os.path.exists(temp_dir) else '目录不存在'}")
+                    return None
+                
+                file_size = os.path.getsize(video_path)
+                logger.info(f"   视频文件大小: {file_size} 字节")
+                
+                if file_size == 0:
+                    logger.error("   视频文件大小为0，下载可能失败")
+                    return None
+                
+                # 验证文件是否真的是视频文件（检查文件头）
+                try:
+                    with open(video_path, 'rb') as f:
+                        header = f.read(12)
+                        # 检查是否是 MP4 文件（MP4 文件头通常是 ftyp 或 moov）
+                        if not (header.startswith(b'\x00\x00\x00') or header.startswith(b'ftyp') or 
+                                header.startswith(b'moov') or header.startswith(b'\x00\x00\x00\x18ftyp')):
+                            logger.warning(f"   文件可能不是有效的视频文件，文件头: {header[:12]}")
+                except Exception as e:
+                    logger.warning(f"   无法验证文件头: {e}")
+                
+                # 提取倒数第10帧
+                frame_path = await extract_frame_from_video(video_path, temp_dir, frame_index=-10)
+                
+                if frame_path and os.path.exists(frame_path):
+                    logger.info(f"   成功提取帧: {frame_path}")
+                    # 使用 ChatGPT 识别图片中的代码
+                    code = await recognize_code_from_image(frame_path)
+                    if code:
+                        logger.info(f"   ChatGPT 识别到代码: {code}")
+                        return code
+                    else:
+                        logger.warning("   ChatGPT 未能识别出代码")
+                else:
+                    logger.warning("   提取帧失败")
+            except Exception as e:
+                logger.error(f"   处理视频时出错: {e}", exc_info=True)
+            finally:
+                # 清理临时文件
+                try:
+                    import shutil
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                except:
+                    pass
+        except Exception as e:
+            logger.error(f"   视频解析出错: {e}", exc_info=True)
+        
+        # 如果有视频，无论解析成功或失败，都不走文本解析
+        # 如果视频解析成功，已经返回了代码；如果失败，直接返回 None
+        logger.warning("   视频解析失败，但有视频时不解析文本，直接返回 None")
+        return None
+    
+    # ================= 第三步：如果没有视频，走文本解析 =================
+    logger.info("   没有视频，开始文本解析流程...")
     text = event.raw_text if event.raw_text else ""
     
-    # 文本解析：查找 "- Code: stakecomxxxxx" 格式
     if text:
         lines = text.split('\n')
         for line in lines:
@@ -291,200 +492,8 @@ async def parse_code_stakecom_daily_drops(event, client):
                     else:
                         logger.debug(f"   匹配到代码但验证失败: {code} (长度: {len(code)})")
     
-    # 如果没有从文本中找到，检查是否有视频
-    if event.video or event.document:
-        try:
-            # 检查是否是视频文件
-            is_video = False
-            if event.video:
-                is_video = True
-            elif event.document:
-                # 检查文档的 MIME 类型
-                mime_type = getattr(event.document, 'mime_type', '')
-                if mime_type and mime_type.startswith('video/'):
-                    is_video = True
-            
-            if is_video:
-                logger.info("   检测到视频，开始下载并提取帧...")
-                
-                # 尝试获取视频地址和详细信息
-                try:
-                    if event.media:
-                        # 尝试获取视频的详细信息
-                        if hasattr(event.media, 'document'):
-                            doc = event.media.document
-                            file_id = doc.id if hasattr(doc, 'id') else 'N/A'
-                            access_hash = doc.access_hash if hasattr(doc, 'access_hash') else 'N/A'
-                            file_name = getattr(doc, 'file_name', 'N/A')
-                            mime_type = getattr(doc, 'mime_type', 'N/A')
-                            file_size = getattr(doc, 'size', 'N/A')
-                            dc_id = getattr(doc, 'dc_id', 'N/A')
-                            
-                            logger.info(f"   视频信息:")
-                            logger.info(f"     - 文件 ID: {file_id}")
-                            logger.info(f"     - 访问哈希: {access_hash}")
-                            logger.info(f"     - 文件名: {file_name}")
-                            logger.info(f"     - MIME 类型: {mime_type}")
-                            logger.info(f"     - 文件大小: {file_size} 字节")
-                            logger.info(f"     - DC ID: {dc_id}")
-                            
-                            # Telegram 媒体文件通过 MTProto API 下载，不能直接通过 HTTP URL 访问
-                            if file_id != 'N/A' and access_hash != 'N/A':
-                                logger.info(f"     - 视频来源: Telegram DC{dc_id} 媒体服务器")
-                                logger.info(f"     - 下载方式: 通过 Telethon MTProto API 下载（需要认证）")
-                        elif hasattr(event.media, 'video'):
-                            video = event.media.video
-                            file_id = video.id if hasattr(video, 'id') else 'N/A'
-                            access_hash = video.access_hash if hasattr(video, 'access_hash') else 'N/A'
-                            duration = getattr(video, 'duration', 'N/A')
-                            dc_id = getattr(video, 'dc_id', 'N/A')
-                            
-                            logger.info(f"   视频信息:")
-                            logger.info(f"     - 文件 ID: {file_id}")
-                            logger.info(f"     - 访问哈希: {access_hash}")
-                            logger.info(f"     - 时长: {duration} 秒")
-                            logger.info(f"     - DC ID: {dc_id}")
-                            
-                            if file_id != 'N/A' and access_hash != 'N/A':
-                                logger.info(f"     - 视频来源: Telegram DC{dc_id} 媒体服务器")
-                                logger.info(f"     - 下载方式: 通过 Telethon MTProto API 下载（需要认证）")
-                        
-                        # 尝试获取消息的完整 URL（如果可能）
-                        try:
-                            entity = await event.get_chat()
-                            chat_username = getattr(entity, 'username', None)
-                            if chat_username:
-                                message_url = f"https://t.me/{chat_username}/{event.id}"
-                                logger.info(f"     - 消息链接: {message_url}")
-                        except Exception as e:
-                            logger.debug(f"   无法获取消息链接: {e}")
-                except Exception as e:
-                    logger.debug(f"   获取视频信息时出错: {e}")
-                
-                # 创建临时目录
-                temp_dir = tempfile.mkdtemp()
-                
-                # 尝试获取原始文件名，如果没有则使用默认名称
-                original_filename = None
-                if event.media and hasattr(event.media, 'document'):
-                    original_filename = getattr(event.media.document, 'file_name', None)
-                
-                # 如果原始文件名存在，使用它；否则让 Telethon 自动处理
-                if original_filename:
-                    video_path = os.path.join(temp_dir, original_filename)
-                else:
-                    # 不指定扩展名，让 Telethon 自动处理
-                    video_path = os.path.join(temp_dir, 'video')
-                
-                logger.info(f"   视频将下载到: {video_path}")
-                
-                try:
-                    # 下载视频（不指定文件路径，让 Telethon 自动处理文件名和扩展名）
-                    logger.info("   开始下载视频...")
-                    
-                    # 【优化】尝试下载，最多重试2次（减少重试次数，加快失败响应）
-                    downloaded_path = None
-                    max_retries = 2  # 从3次减少到2次
-                    last_error = None
-                    
-                    for attempt in range(1, max_retries + 1):
-                        try:
-                            logger.debug(f"   下载尝试 {attempt}/{max_retries}...")
-                            # 明确传入 event.message 或 event.media，而不是直接传入 event
-                            # 这对于复杂消息（转发消息、相册等）更可靠
-                            media_to_download = event.message if hasattr(event, 'message') else event.media
-                            if not media_to_download:
-                                media_to_download = event  # 如果都没有，回退到 event
-                            
-                            downloaded_path = await client.download_media(
-                                media_to_download, 
-                                file=temp_dir,
-                                progress_callback=None  # 可以添加进度回调
-                            )
-                            
-                            if downloaded_path:
-                                logger.info(f"   ✅ 视频下载完成: {downloaded_path}")
-                                video_path = downloaded_path  # 使用实际下载的路径
-                                break
-                            else:
-                                logger.warning(f"   下载尝试 {attempt} 返回 None")
-                                if attempt < max_retries:
-                                    await asyncio.sleep(0.5)  # 【优化】从1秒减少到0.5秒
-                        except Exception as download_error:
-                            last_error = download_error
-                            logger.error(f"   下载尝试 {attempt} 出错: {download_error}")
-                            if attempt < max_retries:
-                                logger.debug(f"   等待0.5秒后重试...")
-                                await asyncio.sleep(0.5)  # 【优化】从1秒减少到0.5秒
-                            else:
-                                raise  # 最后一次尝试失败，抛出异常
-                    
-                    # 如果下载返回 None，直接报错
-                    if not downloaded_path:
-                        logger.error("   视频下载失败: download_media 返回 None")
-                        if last_error:
-                            logger.error(f"   最后错误: {last_error}")
-                        logger.error(f"   临时目录路径: {temp_dir}")
-                        if os.path.exists(temp_dir):
-                            files_in_dir = os.listdir(temp_dir)
-                            logger.error(f"   临时目录内容: {files_in_dir}")
-                        return None
-                    
-                    # 确保 video_path 已设置
-                    if not video_path:
-                        logger.error("   无法确定视频文件路径")
-                        return None
-                    
-                    # 检查文件是否存在和大小
-                    if not os.path.exists(video_path):
-                        logger.error(f"   视频文件不存在: {video_path}")
-                        logger.error(f"   临时目录内容: {os.listdir(temp_dir) if os.path.exists(temp_dir) else '目录不存在'}")
-                        return None
-                    
-                    file_size = os.path.getsize(video_path)
-                    logger.info(f"   视频文件大小: {file_size} 字节")
-                    
-                    if file_size == 0:
-                        logger.error("   视频文件大小为0，下载可能失败")
-                        return None
-                    
-                    # 验证文件是否真的是视频文件（检查文件头）
-                    try:
-                        with open(video_path, 'rb') as f:
-                            header = f.read(12)
-                            # 检查是否是 MP4 文件（MP4 文件头通常是 ftyp 或 moov）
-                            if not (header.startswith(b'\x00\x00\x00') or header.startswith(b'ftyp') or 
-                                    header.startswith(b'moov') or header.startswith(b'\x00\x00\x00\x18ftyp')):
-                                logger.warning(f"   文件可能不是有效的视频文件，文件头: {header[:12]}")
-                    except Exception as e:
-                        logger.warning(f"   无法验证文件头: {e}")
-                    
-                    # 提取倒数第10帧
-                    frame_path = await extract_frame_from_video(video_path, temp_dir, frame_index=-10)
-                    
-                    if frame_path and os.path.exists(frame_path):
-                        logger.info(f"   成功提取帧: {frame_path}")
-                        # 使用 ChatGPT 识别图片中的代码
-                        code = await recognize_code_from_image(frame_path)
-                        if code:
-                            logger.info(f"   ChatGPT 识别到代码: {code}")
-                            return code
-                        else:
-                            logger.warning("   ChatGPT 未能识别出代码")
-                    else:
-                        logger.warning("   提取帧失败")
-                except Exception as e:
-                    logger.error(f"   处理视频时出错: {e}", exc_info=True)
-                finally:
-                    # 清理临时文件
-                    try:
-                        import shutil
-                        shutil.rmtree(temp_dir, ignore_errors=True)
-                    except:
-                        pass
-        except Exception as e:
-            logger.error(f"   检查视频时出错: {e}", exc_info=True)
-    
+    # 如果文本解析也没有找到代码，返回 None
+    logger.warning("   文本解析也未找到代码")
     return None
 
 async def extract_frame_from_video(video_path, output_dir, frame_index=-10):
@@ -964,178 +973,258 @@ async def revalidate_channels():
     else:
         logger.info(f"✅ 成功重新验证 {len(CHANNEL_ENTITIES)} 个频道")
 
-# 监听连接断开事件
+# 使用 Raw 事件直接监听频道消息（最快、最稳的方案）
+# 核心思想：不用 iter_messages, 不等 history, 直接吃 updates
 @client.on(events.Raw)
-async def handle_raw_event(event):
+async def handle_raw_event(update):
     """
-    处理原始事件，用于检测连接状态
+    使用 Raw 事件直接监听频道消息
+    这是目前做频道监听最快、最稳的方案
     """
     global is_connected
     
-    # 某些事件类型可能表示连接问题
-    if hasattr(event, 'CONSTRUCTOR_ID'):
-        # 可以在这里添加特定的事件处理
-        pass
-
-@client.on(events.NewMessage())
-async def my_event_handler(event):
-    try:
-        # 获取频道信息
-        chat_id = event.chat_id
-        channel_username = None
-        channel_title = None
-        
-        # 检查是否是我们监听的频道
-        is_target_channel = False
-        
-        try:
-            entity = await event.get_chat()
-            channel_username = getattr(entity, 'username', None)
-            channel_title = getattr(entity, 'title', None)
-            
-            # 方法1: 检查是否在 CHANNEL_ENTITIES 中（已验证的频道）
-            for ch_entity in CHANNEL_ENTITIES:
-                if hasattr(ch_entity, 'id') and ch_entity.id == chat_id:
-                    is_target_channel = True
-                    break
-                if hasattr(ch_entity, 'username') and ch_entity.username and channel_username:
-                    if ch_entity.username == channel_username or ch_entity.username.lstrip('@') == channel_username.lstrip('@'):
-                        is_target_channel = True
-                        break
-            
-            # 方法2: 如果不在 CHANNEL_ENTITIES 中，直接检查配置（即使验证失败也尝试处理）
-            if not is_target_channel:
-                # 通过用户名匹配配置
+    # 检查是否是消息更新
+    if not hasattr(update, 'message'):
+        # 不是消息更新，可能是其他类型的事件（用于连接状态检测）
+        if hasattr(update, 'CONSTRUCTOR_ID'):
+            pass  # 可以在这里添加特定的事件处理
+        return
+    
+    # 提取消息
+    msg = update.message
+    if not msg:
+        return
+    
+    # 检查是否是频道消息
+    if not hasattr(msg, 'peer_id') or not hasattr(msg.peer_id, 'channel_id'):
+        return  # 不是频道消息，跳过
+    
+    # 获取频道 ID（Raw 事件中的 channel_id 是正整数）
+    raw_channel_id = msg.peer_id.channel_id
+    
+    # 检查是否是我们监听的频道
+    is_target_channel = False
+    channel_key = None
+    channel_username = None
+    channel_title = None
+    parser_name = None
+    
+    # 方法1: 检查是否在 CHANNEL_ENTITIES 中（已验证的频道）
+    # 优化：使用更快的匹配方式
+    for ch_entity in CHANNEL_ENTITIES:
+        if hasattr(ch_entity, 'id'):
+            # Telegram 的完整频道 ID 格式是 -100xxxxxxxxx
+            # Raw 事件中的 channel_id 是正整数部分
+            # 快速匹配：完整 ID 的绝对值取模 1000000000 应该等于 raw_channel_id
+            entity_id_abs = abs(ch_entity.id)
+            # 快速匹配逻辑
+            if entity_id_abs % 1000000000 == raw_channel_id:
+                is_target_channel = True
+                channel_title = getattr(ch_entity, 'title', None)
+                channel_username = getattr(ch_entity, 'username', None)
+                # 快速查找对应的 channel_key（使用用户名或 ID）
                 if channel_username:
                     username_clean = channel_username.lstrip('@')
                     if username_clean in TELEGRAM_CHANNELS:
-                        is_target_channel = True
-                        logger.info(f"   ℹ️ 频道 {username_clean} 在配置中，但未在启动时验证成功，仍将处理消息")
-                
-                # 通过 ID 匹配配置
-                if not is_target_channel and str(chat_id) in TELEGRAM_CHANNELS:
-                    is_target_channel = True
-                    logger.info(f"   ℹ️ 频道 ID {chat_id} 在配置中，但未在启动时验证成功，仍将处理消息")
+                        channel_key = username_clean
+                        parser_name = TELEGRAM_CHANNELS[username_clean]
+                    else:
+                        # 尝试通过 ID 匹配
+                        channel_id_str = f"-100{raw_channel_id}"
+                        if channel_id_str in TELEGRAM_CHANNELS:
+                            channel_key = channel_id_str
+                            parser_name = TELEGRAM_CHANNELS[channel_id_str]
+                else:
+                    # 直接通过 ID 匹配
+                    channel_id_str = f"-100{raw_channel_id}"
+                    if channel_id_str in TELEGRAM_CHANNELS:
+                        channel_key = channel_id_str
+                        parser_name = TELEGRAM_CHANNELS[channel_id_str]
+                break
+    
+    # 方法2: 如果不在 CHANNEL_ENTITIES 中，尝试通过配置匹配
+    if not is_target_channel:
+        # 尝试通过频道 ID 匹配（需要转换为字符串格式）
+        channel_id_str = f"-100{raw_channel_id}"
+        if channel_id_str in TELEGRAM_CHANNELS:
+            is_target_channel = True
+            channel_key = channel_id_str
+            parser_name = TELEGRAM_CHANNELS[channel_id_str]
+            logger.info(f"   ℹ️ 频道 ID {channel_id_str} 在配置中，但未在启动时验证成功，仍将处理消息")
+    
+    # 如果不是目标频道，跳过处理
+    if not is_target_channel:
+        return
+    
+    # 确定解析器
+    if not parser_name:
+        parser_name = TELEGRAM_CHANNELS.get(channel_key, 'default_parser')
+    
+    # 提取消息文本
+    raw_text = ""
+    if hasattr(msg, 'message') and msg.message:
+        raw_text = msg.message.strip()
+    
+    # 记录收到消息的详细信息
+    import datetime
+    import time
+    event_received_time = time.perf_counter()
+    event_received_datetime = datetime.datetime.now()
+    
+    logger.info("=" * 50)
+    logger.info("📩 收到新消息！(Raw Update ⚡)")
+    logger.info(f"   事件接收时间: {event_received_datetime.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}")
+    logger.info(f"   频道: {channel_title or channel_key or f'ID:{raw_channel_id}'} (Raw ID: {raw_channel_id})")
+    logger.info(f"   解析器: {parser_name}")
+    logger.info(f"   消息 ID: {msg.id if hasattr(msg, 'id') else 'N/A'}")
+    logger.info(f"   原始文本长度: {len(raw_text) if raw_text else 0}")
+    
+    # 检查是否是特殊解析器（需要 event 和 client，支持视频和文本）
+    if parser_name == 'stakecom_daily_drops_parser':
+        # 特殊解析器：可以处理视频和文本
+        # 需要从 Raw 事件中获取完整的消息对象
+        parser_func = CODE_PARSERS.get(parser_name)
+        if parser_func:
+            try:
+                # 从 Raw 事件中获取消息 ID 和频道信息，然后获取完整的消息对象
+                msg_id = msg.id if hasattr(msg, 'id') else None
+                if msg_id:
+                    # 使用频道实体获取完整消息对象
+                    # 找到对应的频道实体
+                    channel_entity = None
+                    for ch_entity in CHANNEL_ENTITIES:
+                        entity_id_abs = abs(ch_entity.id)
+                        if entity_id_abs == raw_channel_id or (entity_id_abs > 1000000000000 and entity_id_abs % 1000000000 == raw_channel_id):
+                            channel_entity = ch_entity
+                            break
                     
-        except Exception as e:
-            logger.debug(f"   获取频道信息失败: {e}")
-        
-        # 如果不是目标频道，记录调试信息并跳过处理
-        if not is_target_channel:
-            # 记录调试信息：收到非目标频道的消息
-            logger.debug(f"   收到非目标频道消息: {channel_title or 'N/A'} (ID: {chat_id}, 用户名: {channel_username or 'N/A'})")
-            return
-        
-        # 确定使用哪个解析器
-        parser_name = None
-        channel_key = None
-        
-        # 优先通过用户名匹配
-        if channel_username:
-            # 去掉 @ 符号
-            username_clean = channel_username.lstrip('@')
-            if username_clean in TELEGRAM_CHANNELS:
-                channel_key = username_clean
-                parser_name = TELEGRAM_CHANNELS[username_clean]
-                logger.debug(f"   通过用户名匹配: {username_clean} -> {parser_name}")
-        
-        # 如果用户名匹配失败，尝试通过 ID 匹配（需要先获取频道实体）
-        if not parser_name:
-            for ch_key in TELEGRAM_CHANNELS:
-                try:
-                    entity = await client.get_entity(ch_key)
-                    if hasattr(entity, 'id') and entity.id == chat_id:
-                        channel_key = ch_key
-                        parser_name = TELEGRAM_CHANNELS[ch_key]
-                        logger.debug(f"   通过ID匹配: {ch_key} (ID: {entity.id}) -> {parser_name}")
-                        break
-                except Exception as e:
-                    logger.debug(f"   尝试匹配频道 {ch_key} 失败: {e}")
-                    continue
-        
-        # 如果还是找不到，尝试通过频道标题匹配（模糊匹配）
-        if not parser_name and channel_title:
-            # 尝试在配置中查找包含频道标题关键词的配置
-            # 或者直接使用 chat_id 作为 key（如果配置中有）
-            if str(chat_id) in TELEGRAM_CHANNELS:
-                channel_key = str(chat_id)
-                parser_name = TELEGRAM_CHANNELS[str(chat_id)]
-                logger.debug(f"   通过ID字符串匹配: {chat_id} -> {parser_name}")
-        
-        # 如果还是找不到，使用默认解析器
-        if not parser_name:
-            parser_name = 'default_parser'
-            channel_key = f"unknown_{chat_id}"
-            logger.warning(f"   ⚠️ 未找到频道配置，使用默认解析器")
-        
-        # 记录收到消息的详细信息
-        logger.info("=" * 50)
-        logger.info("📩 收到新消息！")
-        logger.info(f"   频道: {channel_title or channel_key} (ID: {chat_id})")
-        logger.info(f"   解析器: {parser_name}")
-        logger.info(f"   消息 ID: {event.id}")
-        logger.info(f"   发送者 ID: {event.sender_id}")
-        logger.info(f"   原始文本长度: {len(event.raw_text) if event.raw_text else 0}")
-        
-        raw_text = event.raw_text.strip() if event.raw_text else ""
-        
-        # 检查是否是特殊解析器（需要 event 和 client）
-        if parser_name == 'stakecom_daily_drops_parser':
-            # 特殊解析器：可以处理视频和文本
-            parser_func = CODE_PARSERS.get(parser_name)
-            if parser_func:
-                code = await parser_func(event, client)
-            else:
+                    if channel_entity:
+                        # 获取完整的消息对象（支持视频和文本）
+                        try:
+                            full_messages = await client.get_messages(channel_entity, ids=msg_id)
+                            if full_messages and len(full_messages) > 0:
+                                full_event = full_messages[0]
+                                # 调用解析器，传入完整的 event 对象（支持视频和文本处理）
+                                code = await parser_func(full_event, client)
+                            else:
+                                # 如果无法获取完整消息，尝试文本解析
+                                logger.warning(f"   ⚠️ 无法获取完整消息对象，尝试文本解析")
+                                if raw_text:
+                                    import re
+                                    match = re.search(r'- Code:\s*([a-z0-9]+)', raw_text, re.IGNORECASE)
+                                    if match:
+                                        code = match.group(1).strip().lower()
+                                    else:
+                                        code = None
+                                else:
+                                    code = None
+                        except Exception as e:
+                            logger.warning(f"   ⚠️ 获取完整消息对象失败: {e}，尝试文本解析")
+                            # 如果获取失败，尝试文本解析
+                            if raw_text:
+                                import re
+                                match = re.search(r'- Code:\s*([a-z0-9]+)', raw_text, re.IGNORECASE)
+                                if match:
+                                    code = match.group(1).strip().lower()
+                                else:
+                                    code = None
+                            else:
+                                code = None
+                    else:
+                        # 如果找不到频道实体，尝试使用 channel_id 构建 PeerChannel
+                        try:
+                            from telethon.tl.types import PeerChannel
+                            channel_peer = PeerChannel(channel_id=raw_channel_id)
+                            full_messages = await client.get_messages(channel_peer, ids=msg_id)
+                            if full_messages and len(full_messages) > 0:
+                                full_event = full_messages[0]
+                                # 调用解析器，传入完整的 event 对象（支持视频和文本处理）
+                                code = await parser_func(full_event, client)
+                            else:
+                                # 如果无法获取完整消息，尝试文本解析
+                                logger.warning(f"   ⚠️ 无法获取完整消息对象，尝试文本解析")
+                                if raw_text:
+                                    import re
+                                    match = re.search(r'- Code:\s*([a-z0-9]+)', raw_text, re.IGNORECASE)
+                                    if match:
+                                        code = match.group(1).strip().lower()
+                                    else:
+                                        code = None
+                                else:
+                                    code = None
+                        except Exception as e:
+                            logger.warning(f"   ⚠️ 使用 PeerChannel 获取消息失败: {e}，尝试文本解析")
+                            if raw_text:
+                                import re
+                                match = re.search(r'- Code:\s*([a-z0-9]+)', raw_text, re.IGNORECASE)
+                                if match:
+                                    code = match.group(1).strip().lower()
+                                else:
+                                    code = None
+                            else:
+                                code = None
+                else:
+                    # 如果没有消息 ID，只能尝试文本解析
+                    logger.warning(f"   ⚠️ 无法获取消息 ID，尝试文本解析")
+                    if raw_text:
+                        import re
+                        match = re.search(r'- Code:\s*([a-z0-9]+)', raw_text, re.IGNORECASE)
+                        if match:
+                            code = match.group(1).strip().lower()
+                        else:
+                            code = None
+                    else:
+                        code = None
+            except Exception as e:
+                logger.error(f"   ❌ 处理特殊解析器失败: {e}", exc_info=True)
                 code = None
         else:
-            # 普通解析器：只需要文本
-            if not raw_text:
-                logger.info("   消息为空，跳过处理")
-                logger.info("=" * 50)
-                return
-            
-            parser_func = CODE_PARSERS.get(parser_name, parse_code_default)
-            code = parser_func(raw_text)
-        
-        if not code:
-            logger.warning(f"   ⚠️ 无法从消息中提取代码，跳过处理")
-            logger.info(f"   使用的解析器: {parser_name}")
-            if raw_text:
-                logger.info(f"   原始内容: {raw_text[:300]}...")
-            else:
-                logger.info("   消息没有文本内容（可能是纯视频）")
+            code = None
+    else:
+        # 普通解析器：只需要文本
+        if not raw_text:
+            logger.info("   消息为空，跳过处理")
             logger.info("=" * 50)
             return
-
-        logger.info(f"   使用的解析器: {parser_name}")
-        logger.info(f"   原始内容预览: {raw_text[:200]}...")
-        logger.info(f"   ✅ 提取的代码: {code}")
-        logger.info(f"🚀 正在开启新线程执行同步请求任务...")
-
-        # 记录收到消息的时间戳（用于计算总耗时）
-        import time
-        message_received_time = time.perf_counter()
         
-        # 检查是否是测试频道，如果是则只发给特定账号
-        filter_username = None
-        # 检查频道是否是 stake_cn_chat_room（通过 channel_key 或 channel_username 或 chat_id）
-        is_test_channel = (
-            channel_key == 'stake_cn_chat_room' or 
-            (channel_username and channel_username.lstrip('@') == 'stake_cn_chat_room') or
-            str(chat_id) == '-1003315955015'  # stake_cn_chat_room 的频道 ID
-        )
-        if is_test_channel:
-            filter_username = '测试'
-            logger.info(f"   🧪 测试频道模式：仅发送给账号名为 '{filter_username}' 的账号")
-
-        # --- 修复核心：使用 asyncio.to_thread 运行同步函数 ---
-        # 这样就不会触发 SynchronousOnlyOperation 错误
-        await asyncio.to_thread(redeem_bonus_task, code, message_received_time, filter_username)
-        logger.info(f"✅ 任务线程已结束: {code}")
+        parser_func = CODE_PARSERS.get(parser_name, parse_code_default)
+        code = parser_func(raw_text)
+    
+    if not code:
+        logger.warning(f"   ⚠️ 无法从消息中提取代码，跳过处理")
+        logger.info(f"   使用的解析器: {parser_name}")
+        if raw_text:
+            logger.info(f"   原始内容: {raw_text[:300]}...")
         logger.info("=" * 50)
-    except Exception as e:
-        logger.error(f"❌ 处理代码失败: {e}", exc_info=True)
-        logger.error("=" * 50)
+        return
+
+    logger.info(f"   使用的解析器: {parser_name}")
+    logger.info(f"   原始内容预览: {raw_text[:200]}...")
+    logger.info(f"   ✅ 提取的代码: {code}")
+    logger.info(f"🚀 正在开启新线程执行同步请求任务...")
+
+    # 记录收到消息的时间戳（用于计算总耗时）
+    message_received_time = time.perf_counter()
+    
+    # 检查是否是测试频道，如果是则只发给特定账号
+    filter_username = None
+    # 检查频道是否是 stake_cn_chat_room
+    is_test_channel = (
+        channel_key == 'stake_cn_chat_room' or 
+        (channel_username and channel_username.lstrip('@') == 'stake_cn_chat_room')
+    )
+    if is_test_channel:
+        filter_username = 'yzjjdcf'
+        logger.info(f"   🧪 测试频道模式：仅发送给账号名为 '{filter_username}' 的账号")
+
+    # 使用 asyncio.create_task 让任务在后台运行，不阻塞事件循环
+    async def run_task():
+        await asyncio.to_thread(redeem_bonus_task, code, message_received_time, filter_username)
+    
+    asyncio.create_task(run_task())
+    logger.info(f"🚀 任务已提交到后台线程（不阻塞）: {code}")
+    logger.info("=" * 50)
+
 
 # ================= 7. 启动 =================
 async def main():
