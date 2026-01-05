@@ -24,17 +24,15 @@ log_dir = os.path.join(project_root, 'db', 'logs')
 os.makedirs(log_dir, exist_ok=True)
 log_file = os.path.join(log_dir, 'listener.log')  # 使用同一个日志文件
 
-# 配置 logging（如果还没有配置过）
-if not logging.getLogger().handlers:
-    logging.basicConfig(
-        level=logging.INFO,
-        format='[%(asctime)s] %(levelname)s: %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S',
-        handlers=[
-            logging.FileHandler(log_file, encoding='utf-8'),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.FileHandler(log_file, encoding='utf-8'),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
 
 logger = logging.getLogger(__name__)
 
@@ -346,36 +344,157 @@ def request_single_account(account, target_code, code_record, message_received_t
     log_port = config['log_port']
     location = config['location']
     
-    # --- 第五步：查询代码是否可用（第一步接口） ---
-    response, elapsed_ms, last_error = query_code_availability(account, target_code, config)
-
+    # --- 第五步：直接调用领取接口（跳过查询接口以节省时间） ---
+    logger.info(f"🚀 {account.username} ({log_port} - {location}): 直接调用领取接口（跳过查询接口）...")
+    
+    # 直接调用领取接口
+    claim_status, claim_response_body_str = claim_bonus_code(
+        account, target_code, cookie_dict, proxies, log_port, location
+    )
+    
     # 计算总耗时（毫秒）
-    # 优先使用账号开始处理时间，这样不受错峰延迟影响
-    # 如果提供了 message_received_time，也计算从收到消息到完成的时间
     total_elapsed_ms = None
     if account_start_time:
         # 从账号开始处理到请求完成的时间（排除错峰延迟）
         total_elapsed_ms = int((time.perf_counter() - account_start_time) * 1000)
     
-    # 可选：也计算从收到消息到完成的时间（包含错峰延迟）
-    # 如果需要看到包含错峰延迟的总耗时，可以取消下面的注释
-    # if message_received_time:
-    #     total_elapsed_from_message = int((time.perf_counter() - message_received_time) * 1000)
-    #     logger.debug(f"   从收到消息到完成: {total_elapsed_from_message}ms (包含错峰延迟)")
-    
-    handle_response_result(
-        response=response,
+    # 处理直接领取的结果
+    _handle_direct_claim_result(
+        claim_status=claim_status,
+        claim_response_body_str=claim_response_body_str,
         account=account,
         log_port=log_port,
         location=location,
-        elapsed_ms=elapsed_ms,
-        total_elapsed_ms=total_elapsed_ms,  # 从收到消息到请求完成的总耗时
-        last_error=last_error,
+        total_elapsed_ms=total_elapsed_ms,
         target_code=target_code,
-        code_record=code_record,
-        cookie_dict=cookie_dict,
-        proxies=proxies
+        code_record=code_record
     )
+
+
+# ================= 2.1. 直接领取结果处理方法 =================
+def _handle_direct_claim_result(claim_status, claim_response_body_str, account, log_port, location, total_elapsed_ms, target_code, code_record):
+    """
+    处理直接调用领取接口的结果（跳过查询接口）
+    
+    Args:
+        claim_status: 领取状态 ('claim_success', 'claim_failure')
+        claim_response_body_str: 领取接口的响应体（JSON字符串）
+        account: 账号对象
+        log_port: 日志端口
+        location: 代理归属地
+        total_elapsed_ms: 总耗时（毫秒）
+        target_code: 目标代码
+        code_record: 本次推送的 CodeRecord 对象
+    """
+    bonus_value = None
+    error_msg = None
+    
+    # 格式化耗时信息
+    if total_elapsed_ms is not None:
+        time_info = f"领取接口总耗时 {total_elapsed_ms}ms"
+    else:
+        time_info = "领取接口完成"
+    
+    # 解析响应体以获取奖金金额和错误信息
+    if claim_response_body_str:
+        try:
+            claim_res_json = json.loads(claim_response_body_str)
+            
+            if claim_status == 'claim_success':
+                # 领取成功，提取奖金金额
+                data = claim_res_json.get('data', {})
+                claim_result = data.get('claimConditionBonusCode', {})
+                if claim_result:
+                    bonus_value = claim_result.get('amount')
+                    currency = claim_result.get('currency', '')
+                    if bonus_value:
+                        logger.info(f"✅ {account.username} ({log_port} - {location}): 领取成功 - 金额: {bonus_value} {currency} | {time_info}")
+            elif claim_status == 'not_found':
+                # 代码未找到，提取错误信息
+                errors = claim_res_json.get('errors', [])
+                if errors:
+                    error_msg = errors[0].get('message', '代码未找到或不可用')
+                    logger.warning(f"❌ {account.username} ({log_port} - {location}): 代码无效（未找到或不可用）- {error_msg} | {time_info}")
+            elif claim_status == 'inactive':
+                # 代码次数领取完，提取错误信息
+                errors = claim_res_json.get('errors', [])
+                if errors:
+                    error_msg = errors[0].get('message', '代码次数领取完')
+                    logger.warning(f"❌ {account.username} ({log_port} - {location}): 代码无效（次数领取完）- {error_msg} | {time_info}")
+            elif claim_status == 'session_expired':
+                # 会话已过期，提取错误信息并停用账号
+                errors = claim_res_json.get('errors', [])
+                if errors:
+                    error_msg = errors[0].get('message', '会话已过期')
+                    logger.warning(f"❌ {account.username} ({log_port} - {location}): 会话已过期 - {error_msg} | {time_info}")
+                # 停用账号
+                try:
+                    StakeAccount.objects.filter(pk=account.pk).update(is_active=False)
+                    logger.warning(f"⚠️ {account.username}: 账号已停用（会话过期）")
+                except Exception as e:
+                    logger.error(f"⚠️ 停用账号失败: {e}")
+            elif claim_status == 'already_claimed':
+                # 代码已领过，提取错误信息
+                errors = claim_res_json.get('errors', [])
+                if errors:
+                    error_msg = errors[0].get('message', '代码已领过')
+                    logger.warning(f"❌ {account.username} ({log_port} - {location}): 代码已领过 - {error_msg} | {time_info}")
+            else:
+                # 领取失败，提取错误信息
+                errors = claim_res_json.get('errors', [])
+                if errors:
+                    error_msg = errors[0].get('message', '未知错误')
+                    logger.warning(f"❌ {account.username} ({log_port} - {location}): 领取失败 - {error_msg} | {time_info}")
+        except Exception as e:
+            logger.debug(f"解析响应体失败: {e}")
+            if claim_status == 'claim_failure':
+                error_msg = str(e)[:200]
+    
+    # 记录到数据库
+    try:
+        from serverbot.models import ClaimRecord, CodeRecord
+        from django.db.models import F
+        
+        # 创建ClaimRecord
+        ClaimRecord.objects.create(
+            account=account,
+            code_record=code_record,
+            code=target_code,
+            status=claim_status,
+            bonus_value=str(bonus_value) if bonus_value else None,
+            response_time_ms=None,  # 直接领取模式不记录单个请求耗时
+            error_message=error_msg,
+            query_response_body=None,  # 跳过查询接口，所以没有查询响应
+            claim_response_body=claim_response_body_str  # 领取接口的响应体
+        )
+        
+        # 更新CodeRecord统计信息（不再更新status字段，因为码是跟个人绑定的）
+        update_fields = {}
+        if claim_status == 'claim_success':
+            # 领取成功
+            update_fields['success_count'] = F('success_count') + 1
+            if bonus_value:
+                update_fields['actual_value'] = str(bonus_value)
+        elif claim_status == 'not_found':
+            # 代码未找到或不可用
+            update_fields['failure_count'] = F('failure_count') + 1
+        elif claim_status == 'inactive':
+            # 代码次数领取完
+            update_fields['failure_count'] = F('failure_count') + 1
+        elif claim_status == 'session_expired':
+            # 会话已过期（账号已停用）
+            update_fields['failure_count'] = F('failure_count') + 1
+        elif claim_status == 'claim_failure':
+            # 领取失败
+            update_fields['failure_count'] = F('failure_count') + 1
+        
+        # 所有状态都增加总尝试次数
+        update_fields['total_attempts'] = F('total_attempts') + 1
+        
+        if update_fields:
+            CodeRecord.objects.filter(pk=code_record.pk).update(**update_fields)
+    except Exception as e:
+        logger.error(f"⚠️ 记录数据库失败: {e}")
 
 
 # ================= 2. 领取接口调用方法 =================
@@ -413,14 +532,21 @@ def claim_bonus_code(account, target_code, cookie_dict, proxies, log_port, locat
         "x-operation-name": "ClaimConditionBonusCode",  # 领取接口的操作名
     })
     
+    # 使用实际的 GraphQL mutation（根据用户提供的 payload）
+    # 默认使用 USDT 作为货币类型，如果需要支持其他货币，可以从账号配置中获取
+    currency = "usdt"  # 默认货币类型，可以根据需要从账号配置中获取
+    
     # 获取 turnstileToken（通过 Capsolver API）
     logger.info(f"🔐 {account.username} ({log_port} - {location}): 开始获取 Turnstile token...")
     from serverbot.bypass import get_turnstile_token
     
+    # 记录开始时间
+    turnstile_start_time = time.perf_counter()
+    
     # 调用 Capsolver API 获取 Turnstile token
     # TODO: site_key 需要从实际页面获取，或者从配置文件中读取
     # 目前先使用 None，让函数使用默认值（需要后续替换为实际值）
-    # 构建包含动态参数的 site_url
+    # 构建包含动态参数的 site_url（需要在 currency 定义之后）
     site_url = f"https://stake.com/zh/settings/offers?type=drop&code={target_code}&currency={currency}&modal=redeemBonus"
     
     turnstile_token = get_turnstile_token(
@@ -430,15 +556,14 @@ def claim_bonus_code(account, target_code, cookie_dict, proxies, log_port, locat
         max_wait=60  # 最大等待 60 秒
     )
     
+    # 计算 Turnstile token 获取耗时
+    turnstile_elapsed_ms = int((time.perf_counter() - turnstile_start_time) * 1000)
+    
     if not turnstile_token:
-        logger.error(f"❌ {account.username} ({log_port} - {location}): 获取 Turnstile token 失败，无法继续领取")
+        logger.error(f"❌ {account.username} ({log_port} - {location}): 获取 Turnstile token 失败，无法继续领取 | 耗时 {turnstile_elapsed_ms}ms")
         return 'claim_failure', "获取 Turnstile token 失败"
     
-    logger.info(f"✅ {account.username} ({log_port} - {location}): Turnstile token 获取成功")
-    
-    # 使用实际的 GraphQL mutation（根据用户提供的 payload）
-    # 默认使用 USDT 作为货币类型，如果需要支持其他货币，可以从账号配置中获取
-    currency = "usdt"  # 默认货币类型，可以根据需要从账号配置中获取
+    logger.info(f"✅ {account.username} ({log_port} - {location}): Turnstile token 获取成功 | 耗时 {turnstile_elapsed_ms}ms")
     
     # 注意：currency 在 variables 中应该是小写的 "usdt"，而不是大写的 "USDT"
     # GraphQL 的 CurrencyEnum 类型会自动处理大小写转换
@@ -460,41 +585,76 @@ def claim_bonus_code(account, target_code, cookie_dict, proxies, log_port, locat
         payload=payload
     )
     
-    # 解析响应
-    if claim_response and claim_response.status_code == 200:
+    # 提取并保存完整响应体（不进行严格解析）
+    claim_response_body_str = None
+    
+    if claim_response:
         try:
-            claim_res_json = claim_response.json()
-            
-            # 检查是否有错误
-            errors = claim_res_json.get('errors', [])
-            if errors:
-                error_msg = errors[0].get('message', '未知错误')
-                logger.warning(f"❌ {account.username} ({log_port} - {location}): 领取失败 - {error_msg}")
-                return 'claim_failure', json.dumps(claim_res_json, ensure_ascii=False, indent=2)
-            
-            # 解析领取结果（使用新的返回结构）
-            data = claim_res_json.get('data', {})
-            claim_result = data.get('claimConditionBonusCode', {})
-            
-            # 如果返回了 bonusCode 和 amount，说明领取成功
-            if claim_result.get('bonusCode') and claim_result.get('amount'):
-                amount = claim_result.get('amount')
-                currency = claim_result.get('currency', '')
-                logger.info(f"✅ {account.username} ({log_port} - {location}): 领取成功 - 金额: {amount} {currency}")
-                return 'claim_success', json.dumps(claim_res_json, ensure_ascii=False, indent=2)
-            else:
-                # 没有返回预期的数据，可能是领取失败
-                logger.warning(f"❌ {account.username} ({log_port} - {location}): 领取失败 - 响应中缺少必要字段")
-                return 'claim_failure', json.dumps(claim_res_json, ensure_ascii=False, indent=2)
+            # 优先尝试获取 JSON 格式的响应体
+            try:
+                claim_response_body_str = json.dumps(claim_response.json(), ensure_ascii=False, indent=2)
+            except (ValueError, json.JSONDecodeError):
+                # 如果不是 JSON，获取文本格式
+                try:
+                    claim_response_body_str = claim_response.text
+                except:
+                    claim_response_body_str = f"无法获取响应体 (状态码: {claim_response.status_code})"
         except Exception as e:
-            logger.error(f"❌ {account.username} ({log_port} - {location}): 解析领取结果失败: {e}")
-            return 'claim_failure', f"解析失败: {str(e)}"
+            claim_response_body_str = f"提取响应体失败: {str(e)}"
+        
+        # 判断状态：HTTP 200 需要检查响应体中的错误
+        if claim_response.status_code == 200:
+            # HTTP 200 但可能包含错误，需要检查响应体
+            try:
+                claim_res_json = claim_response.json()
+                errors = claim_res_json.get('errors', [])
+                
+                if errors:
+                    # 有错误信息，检查错误类型
+                    error_info = errors[0]
+                    error_type = error_info.get('errorType', '')
+                    error_msg = error_info.get('message', '未知错误')
+                    
+                    # 检查错误类型
+                    if error_type == 'notFound' or 'not found' in error_msg.lower() or 'cannot be found' in error_msg.lower():
+                        logger.warning(f"❌ {account.username} ({log_port} - {location}): 代码无效（未找到或不可用）| 领取接口请求耗时 {elapsed_ms}ms")
+                        return 'not_found', claim_response_body_str
+                    elif error_type == 'bonusCodeInactive' or 'unavailable' in error_msg.lower():
+                        logger.warning(f"❌ {account.username} ({log_port} - {location}): 代码无效（次数领取完）| 领取接口请求耗时 {elapsed_ms}ms")
+                        return 'inactive', claim_response_body_str
+                    elif error_type == 'disabledSession' or 'session has expired' in error_msg.lower() or 'session expired' in error_msg.lower():
+                        logger.warning(f"❌ {account.username} ({log_port} - {location}): 会话已过期，账号将被停用 | 领取接口请求耗时 {elapsed_ms}ms")
+                        return 'session_expired', claim_response_body_str
+                    elif error_type == 'codeAlreadyClaimed' or 'already claimed' in error_msg.lower() or 'already_claimed' in error_msg.lower():
+                        logger.warning(f"❌ {account.username} ({log_port} - {location}): 代码已领过 | 领取接口请求耗时 {elapsed_ms}ms")
+                        return 'already_claimed', claim_response_body_str
+                    else:
+                        # 其他类型的错误
+                        logger.warning(f"❌ {account.username} ({log_port} - {location}): 领取失败 - {error_msg} | 领取接口请求耗时 {elapsed_ms}ms")
+                        return 'claim_failure', claim_response_body_str
+                else:
+                    # 没有错误，说明领取成功
+                    logger.info(f"✅ {account.username} ({log_port} - {location}): 领取成功 (HTTP 200) | 领取接口请求耗时 {elapsed_ms}ms")
+                    return 'claim_success', claim_response_body_str
+            except Exception as e:
+                # 解析 JSON 失败，但 HTTP 200，假设成功
+                logger.warning(f"⚠️ {account.username} ({log_port} - {location}): 无法解析响应体，但 HTTP 200，假设成功 | 领取接口请求耗时 {elapsed_ms}ms")
+                return 'claim_success', claim_response_body_str
+        else:
+            status_code = claim_response.status_code
+            logger.warning(f"❌ {account.username} ({log_port} - {location}): 领取失败 (HTTP {status_code}) | 领取接口请求耗时 {elapsed_ms}ms")
+            if last_error:
+                logger.warning(f"   错误信息: {last_error[:100]}")
+            return 'claim_failure', claim_response_body_str if claim_response_body_str else f"HTTP {status_code}"
     else:
-        status_code = claim_response.status_code if claim_response else 'None'
-        logger.warning(f"❌ {account.username} ({log_port} - {location}): 领取接口返回错误状态 {status_code}")
+        # 无响应对象
+        logger.warning(f"❌ {account.username} ({log_port} - {location}): 领取失败 (无响应) | 领取接口请求耗时 {elapsed_ms}ms")
         if last_error:
             logger.warning(f"   错误信息: {last_error[:100]}")
-        return 'claim_failure', f"HTTP {status_code}"
+            claim_response_body_str = f"无响应对象\n错误信息: {last_error}"
+        else:
+            claim_response_body_str = "无响应对象"
+        return 'claim_failure', claim_response_body_str
 
 
 # ================= 3. 结果解析方法 (深度逻辑) =================
@@ -515,11 +675,11 @@ def handle_response_result(response, account, log_port, location, elapsed_ms, to
     query_response_body_str = None  # 查询接口的响应体
     claim_response_body_str = None  # 领取接口的响应体（仅当走到第二步时才有）
     
-    # 格式化耗时信息
+    # 格式化耗时信息（标注是查询接口）
     if total_elapsed_ms is not None:
-        time_info = f"请求耗时 {elapsed_ms}ms | 总耗时 {total_elapsed_ms}ms"
+        time_info = f"查询接口请求耗时 {elapsed_ms}ms | 总耗时 {total_elapsed_ms}ms"
     else:
-        time_info = f"耗时 {elapsed_ms}ms"
+        time_info = f"查询接口耗时 {elapsed_ms}ms"
     
     if not response:
         logger.warning(f"❌ {account.username} ({log_port} - {location}): 代码无效（彻底异常: {last_error[:40]}）| {time_info}")
@@ -645,22 +805,19 @@ def handle_response_result(response, account, log_port, location, elapsed_ms, to
             claim_response_body=claim_response_body_str  # 领取接口的响应体（仅当走到第二步时才有）
         )
         
-        # 更新CodeRecord统计信息（只更新特定状态）
+        # 更新CodeRecord统计信息（不再更新status字段，因为码是跟个人绑定的）
         update_fields = {}
         if claim_status == 'claim_success':
             # 领取成功
             update_fields['success_count'] = F('success_count') + 1
             if bonus_value:
                 update_fields['actual_value'] = str(bonus_value)
-                update_fields['status'] = 'valid'
         elif claim_status == 'claim_failure':
             # 领取失败
             update_fields['failure_count'] = F('failure_count') + 1
         elif claim_status == 'inactive':
             # 次数领取完
             update_fields['failure_count'] = F('failure_count') + 1
-            if code_record.status == 'unknown':
-                update_fields['status'] = 'expired'
         elif claim_status == 'already_claimed':
             # 已领过
             update_fields['failure_count'] = F('failure_count') + 1

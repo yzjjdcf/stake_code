@@ -160,9 +160,8 @@ class CodeRecord(models.Model):
         ordering = ['-created_at']
     
     def __str__(self):
-        status_display = dict(self.STATUS_CHOICES).get(self.status, self.status)
         value_str = f" - {self.actual_value}" if self.actual_value else ""
-        return f"{self.code} ({status_display}){value_str}"
+        return f"{self.code}{value_str}"
 
 class ClaimRecord(models.Model):
     """记录每个账号的抢码结果"""
@@ -170,16 +169,15 @@ class ClaimRecord(models.Model):
     code_record = models.ForeignKey(CodeRecord, on_delete=models.SET_NULL, null=True, related_name='claim_records', verbose_name="代码记录")
     code = models.CharField(max_length=100, verbose_name="红包代码", db_index=True)
     
-    # 状态：有效代码的详细状态 + 无效状态
-    # 有效：次数领取完、已领过、流水不够、领取成功、领取失败
-    # 无效：找不到、403错误、其他错误
+    # 状态：领取接口返回的所有状态
     STATUS_CHOICES = [
         ('claim_success', '✅ 领取成功'),
         ('claim_failure', '❌ 领取失败'),
         ('inactive', '⌛ 次数领取完'),
+        ('not_found', '❌ 找不到'),
+        ('session_expired', '⚠️ 会话已过期'),
         ('already_claimed', '🔁 已领过'),
         ('weekly_wager_requirement', '📋 流水不够'),
-        ('not_found', '❌ 找不到'),
         ('error_403', '⚠️ 403错误'),
         ('error', '❓ 其他错误'),
     ]

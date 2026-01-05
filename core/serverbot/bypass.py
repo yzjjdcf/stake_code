@@ -48,21 +48,23 @@ if not bypass_logger.handlers:
         if not bypass_logger.handlers:
             file_handler = logging.FileHandler(bypass_log_file, encoding='utf-8')
             file_handler.setLevel(logging.DEBUG)
-            console_handler = logging.StreamHandler()
-            console_handler.setLevel(logging.INFO)
             
             # 统一的时间戳格式（与其他模块保持一致）
             detailed_formatter = logging.Formatter(
-                '[%(asctime)s] [%(levelname)s] %(message)s',
+                '[%(asctime)s] %(levelname)s: %(message)s',
                 datefmt='%Y-%m-%d %H:%M:%S'
             )
             file_handler.setFormatter(detailed_formatter)
-            console_handler.setFormatter(detailed_formatter)
             
             bypass_logger.addHandler(file_handler)
+            
+            # 添加控制台 handler
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.INFO)
+            console_handler.setFormatter(detailed_formatter)
             bypass_logger.addHandler(console_handler)
             
-            # 禁用传播，避免日志被父 logger 重复处理
+            # 禁用传播，避免日志重复
             bypass_logger.propagate = False
 
 

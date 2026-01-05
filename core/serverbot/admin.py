@@ -338,12 +338,14 @@ class ClaimRecordInline(admin.TabularInline):
     def get_status_display_colored(self, obj):
         """带颜色的状态显示"""
         colors = {
-            'success': '#28a745',
-            'failure': '#dc3545',
+            'claim_success': '#28a745',
+            'claim_failure': '#dc3545',
             'error_403': '#ffc107',
             'not_found': '#6c757d',
             'inactive': '#17a2b8',
+            'session_expired': '#ff9800',
             'already_claimed': '#6f42c1',
+            'weekly_wager_requirement': '#17a2b8',
             'error': '#e83e8c',
         }
         status_display = obj.get_status_display()
@@ -376,12 +378,11 @@ class CodeRecordAdmin(admin.ModelAdmin):
         return request.user.is_superuser
     list_display = (
         'code',  # 红包代码
-        'get_is_valid_status_display',  # 是否有效码（状态）
         'get_statistics',  # 统计信息
         'get_claim_details_link',  # 领取明细
         'created_at',  # 创建时间
     )
-    list_filter = ('status', 'created_at', 'is_timeout_trigger')
+    list_filter = ('created_at', 'is_timeout_trigger')
     search_fields = ('code',)
     readonly_fields = ('total_attempts', 'success_count', 'failure_count', 'error_403_count', 'created_at', 'updated_at')
     
@@ -390,7 +391,7 @@ class CodeRecordAdmin(admin.ModelAdmin):
     
     fieldsets = (
         ('基本信息', {
-            'fields': ('code', 'status', 'actual_value', 'is_timeout_trigger')
+            'fields': ('code', 'actual_value', 'is_timeout_trigger')
         }),
         ('统计信息', {
             'fields': ('total_attempts', 'success_count', 'failure_count', 'error_403_count')
@@ -403,57 +404,6 @@ class CodeRecordAdmin(admin.ModelAdmin):
             'fields': ('created_at', 'updated_at')
         }),
     )
-    
-    def get_is_valid_status_display(self, obj):
-        """
-        显示代码是否有效，以及有效的子状态
-        有效：可用、次数领取完、流水不够
-        无效：未找到、403错误、其他错误
-        """
-        # 获取所有相关的 ClaimRecord
-        claim_records = obj.claim_records.all()
-        
-        if not claim_records.exists():
-            # 没有记录，显示未知
-            return mark_safe('<span style="color: #6c757d; font-weight: bold;">❓ 未知</span>')
-        
-        # 统计各种状态
-        has_success = claim_records.filter(status='success').exists()
-        has_inactive = claim_records.filter(status='inactive').exists()
-        has_already_claimed = claim_records.filter(status='already_claimed').exists()
-        has_weekly_wager = claim_records.filter(status='weekly_wager_requirement').exists()
-        has_not_found = claim_records.filter(status='not_found').exists()
-        has_error_403 = claim_records.filter(status='error_403').exists()
-        has_error = claim_records.filter(status='error').exists()
-        
-        # 判断是否有效：只要有 success、inactive、already_claimed、weekly_wager_requirement 中的任意一个，就认为有效
-        is_valid = has_success or has_inactive or has_already_claimed or has_weekly_wager
-        
-        if is_valid:
-            # 有效，显示子状态
-            sub_statuses = []
-            if has_success:
-                sub_statuses.append('<span style="color: #28a745;">✅ 可用</span>')
-            if has_inactive or has_already_claimed:
-                sub_statuses.append('<span style="color: #ffc107;">⌛ 次数领取完</span>')
-            if has_weekly_wager:
-                sub_statuses.append('<span style="color: #17a2b8;">📋 流水不够</span>')
-            
-            # 去重并组合显示
-            unique_statuses = list(dict.fromkeys(sub_statuses))  # 保持顺序的去重
-            status_html = ' | '.join(unique_statuses)
-            
-            return mark_safe(
-                f'<div style="font-weight: bold;">'
-                f'<span style="color: #28a745;">✅ 有效</span><br>'
-                f'<span style="font-size: 11px; font-weight: normal;">{status_html}</span>'
-                f'</div>'
-            )
-        else:
-            # 无效
-            return mark_safe('<span style="color: #dc3545; font-weight: bold;">❌ 无效</span>')
-    
-    get_is_valid_status_display.short_description = '是否有效码'
     
     def get_statistics(self, obj):
         """显示统计信息"""
@@ -498,8 +448,17 @@ class AccountFilter(SimpleListFilter):
         # 获取所有不同的账号（已应用权限过滤）
         accounts = qs.values_list('account__id', 'account__username').distinct()
         
+        # 使用字典去重（按账号 ID），确保每个账号只出现一次
+        accounts_dict = {}
+        for acc_id, username in accounts:
+            if acc_id and acc_id not in accounts_dict:
+                accounts_dict[acc_id] = username or f'账号ID:{acc_id}'
+        
+        # 按用户名排序
+        sorted_accounts = sorted(accounts_dict.items(), key=lambda x: x[1])
+        
         # 返回选项
-        return [(str(acc_id), username) for acc_id, username in accounts if acc_id and username]
+        return [(str(acc_id), username) for acc_id, username in sorted_accounts]
 
     def queryset(self, request, queryset):
         if self.value():
@@ -586,7 +545,7 @@ class BonusValueFilter(SimpleListFilter):
 
 @admin.register(ClaimRecord)
 class ClaimRecordAdmin(admin.ModelAdmin):
-    # 使用自定义模板显示总计
+    # 使用自定义模板显示统计信息
     change_list_template = 'admin/claimrecord_change_list.html'
     
     # 权限控制：普通用户只能看到与自己创建的账号相关的 ClaimRecord
@@ -666,6 +625,47 @@ class ClaimRecordAdmin(admin.ModelAdmin):
     def get_search_fields(self, request):
         """禁用默认搜索框，使用自定义的多搜索框"""
         return []  # 返回空列表，禁用默认搜索框
+    
+    def changelist_view(self, request, extra_context=None):
+        """重写 changelist_view 以计算统计信息"""
+        # 调用父类方法获取响应
+        response = super().changelist_view(request, extra_context=extra_context)
+        
+        # 检查 response 是否是 TemplateResponse
+        if not response or not hasattr(response, 'context_data'):
+            return response
+        
+        # 从 context_data 中获取已筛选的 queryset（包含所有筛选条件）
+        cl_obj = response.context_data.get('cl')
+        if cl_obj and hasattr(cl_obj, 'queryset'):
+            filtered_qs = cl_obj.queryset
+        else:
+            # 如果无法获取，使用 get_queryset
+            filtered_qs = self.get_queryset(request)
+        
+        # 计算统计：只计算 claim_success 状态且有 bonus_value 的记录
+        total_amount = 0
+        success_count = 0
+        
+        for record in filtered_qs.filter(status='claim_success', bonus_value__isnull=False).exclude(bonus_value=''):
+            if record.bonus_value:
+                # 提取金额（支持 $12.50, 12.50, $50 等格式）
+                match = re.search(r'[\d.]+', str(record.bonus_value))
+                if match:
+                    try:
+                        amount = float(match.group())
+                        total_amount += amount
+                        success_count += 1
+                    except ValueError:
+                        pass
+        
+        # 添加到响应上下文
+        response.context_data['total_amount'] = total_amount
+        response.context_data['success_count'] = success_count
+        response.context_data['total_records'] = filtered_qs.count()
+        
+        return response
+    
     readonly_fields = ('created_at', 'get_query_response_body_formatted', 'get_claim_response_body_formatted')
     
     fieldsets = (
@@ -691,13 +691,15 @@ class ClaimRecordAdmin(admin.ModelAdmin):
     def get_status_display_colored(self, obj):
         """带颜色的状态显示"""
         colors = {
-            'success': '#28a745',        # 绿色
-            'failure': '#dc3545',         # 红色
-            'error_403': '#ffc107',       # 黄色
-            'not_found': '#6c757d',       # 灰色
-            'inactive': '#17a2b8',        # 蓝色
-            'already_claimed': '#6f42c1', # 紫色
-            'error': '#dc3545',           # 红色
+            'claim_success': '#28a745',        # 绿色
+            'claim_failure': '#dc3545',        # 红色
+            'error_403': '#ffc107',            # 黄色
+            'not_found': '#6c757d',            # 灰色
+            'inactive': '#17a2b8',             # 蓝色
+            'session_expired': '#ff9800',      # 橙色
+            'already_claimed': '#6f42c1',      # 紫色
+            'weekly_wager_requirement': '#17a2b8', # 蓝色
+            'error': '#dc3545',                # 红色
         }
         status_display = obj.get_status_display()
         color = colors.get(obj.status, '#000')
@@ -786,150 +788,3 @@ class ClaimRecordAdmin(admin.ModelAdmin):
                 f'overflow-y: auto; white-space: pre-wrap;">{escaped_text}</pre>'
             )
     get_claim_response_body_formatted.short_description = '领取接口响应体'
-    
-    def changelist_view(self, request, extra_context=None):
-        """重写 changelist_view 以处理自定义搜索和计算总计"""
-        # 处理自定义搜索参数
-        code_search = request.GET.get('code_search', '').strip()
-        username_search = request.GET.get('username_search', '').strip()
-        creator_search = request.GET.get('creator_search', '').strip()
-        status_search = request.GET.get('status_search', '').strip()
-        bonus_search = request.GET.get('bonus_search', '').strip()
-        date_start = request.GET.get('date_start', '').strip()
-        date_end = request.GET.get('date_end', '').strip()
-        
-        # 获取所有不同的状态值和金额值（用于下拉框）
-        base_qs = self.get_queryset(request)
-        # 直接使用模型定义的 STATUS_CHOICES，确保去重
-        status_list = list(ClaimRecord.STATUS_CHOICES)
-        
-        # 获取所有不同的金额值（去重）
-        bonus_values = base_qs.filter(
-            bonus_value__isnull=False
-        ).exclude(bonus_value='').values_list('bonus_value', flat=True).distinct()
-        
-        # 提取金额并去重
-        amounts = set()
-        for value in bonus_values:
-            if value:
-                # 尝试提取数字（支持 $12.50, 12.50, $50 等格式）
-                match = re.search(r'[\d.]+', str(value))
-                if match:
-                    amounts.add(float(match.group()))
-        
-        # 按金额排序
-        sorted_amounts = sorted(amounts, reverse=True)
-        bonus_list = [(str(amt), f'${amt:.2f}') for amt in sorted_amounts[:50]]  # 最多显示50个
-        
-        # 保存原始 get_queryset 方法
-        original_get_queryset = self.get_queryset
-        
-        # 创建包装的 get_queryset 方法，应用自定义搜索
-        def custom_get_queryset(r):
-            qs = original_get_queryset(r)
-            # 应用自定义搜索
-            if code_search:
-                qs = qs.filter(Q(code__icontains=code_search) | Q(code_record__code__icontains=code_search))
-            if username_search:
-                qs = qs.filter(account__username__icontains=username_search)
-            if creator_search and r.user.is_superuser:
-                qs = qs.filter(account__created_by__username__icontains=creator_search)
-            if status_search:
-                qs = qs.filter(status=status_search)  # 精确匹配
-            if bonus_search:
-                qs = qs.filter(bonus_value__icontains=bonus_search)  # 模糊匹配金额
-            # 时间区间搜索
-            if date_start:
-                from django.utils.dateparse import parse_date
-                start_date = parse_date(date_start)
-                if start_date:
-                    qs = qs.filter(created_at__date__gte=start_date)
-            if date_end:
-                from django.utils.dateparse import parse_date
-                end_date = parse_date(date_end)
-                if end_date:
-                    qs = qs.filter(created_at__date__lte=end_date)
-            return qs
-        
-        # 临时替换 get_queryset 方法
-        self.get_queryset = custom_get_queryset
-        
-        # 准备 extra_context
-        if extra_context is None:
-            extra_context = {}
-        
-        # 先添加搜索相关的上下文
-        extra_context['code_search'] = code_search
-        extra_context['username_search'] = username_search
-        extra_context['creator_search'] = creator_search
-        extra_context['status_search'] = status_search
-        extra_context['bonus_search'] = bonus_search
-        extra_context['date_start'] = date_start
-        extra_context['date_end'] = date_end
-        extra_context['status_list'] = status_list
-        extra_context['bonus_list'] = bonus_list
-        
-        response = None
-        try:
-            # 调用父类方法获取响应
-            response = super().changelist_view(request, extra_context=extra_context)
-            
-            # 使用 ChangeList 来获取筛选后的 queryset（包含所有筛选器）
-            from django.contrib.admin.views.main import ChangeList
-            
-            # 创建 ChangeList 实例来应用所有筛选
-            cl = ChangeList(
-                request, 
-                self.model, 
-                self.list_display, 
-                self.list_display_links,
-                self.get_list_filter(request), 
-                self.date_hierarchy, 
-                [],
-                self.list_select_related, 
-                self.list_per_page, 
-                self.list_max_show_all,
-                self.list_editable, 
-                self
-            )
-            
-            # 获取筛选后的 queryset（不考虑分页）
-            filtered_qs = cl.get_queryset(request)
-            
-            # 计算总计：只计算 success 状态且有 bonus_value 的记录
-            total_amount = 0
-            success_count = 0
-            
-            for record in filtered_qs.filter(status='success', bonus_value__isnull=False).exclude(bonus_value=''):
-                if record.bonus_value:
-                    # 提取金额（支持 $12.50, 12.50, $50 等格式）
-                    match = re.search(r'[\d.]+', str(record.bonus_value))
-                    if match:
-                        try:
-                            amount = float(match.group())
-                            total_amount += amount
-                            success_count += 1
-                        except ValueError:
-                            pass
-            
-            # 添加到响应上下文
-            if response and hasattr(response, 'context_data'):
-                response.context_data['total_amount'] = total_amount
-                response.context_data['success_count'] = success_count
-                response.context_data['total_records'] = filtered_qs.count()
-        except Exception as e:
-            # 如果出错，设置默认值
-            import traceback
-            traceback.print_exc()
-            if response and hasattr(response, 'context_data'):
-                response.context_data['total_amount'] = 0
-                response.context_data['success_count'] = 0
-                response.context_data['total_records'] = 0
-            # 如果 response 还没有创建，重新调用父类方法
-            if response is None:
-                response = super().changelist_view(request, extra_context=extra_context)
-        finally:
-            # 恢复原始的 get_queryset 方法
-            self.get_queryset = original_get_queryset
-        
-        return response
