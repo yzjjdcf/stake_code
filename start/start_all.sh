@@ -8,14 +8,15 @@ set -e
 PROJECT_DIR="/root/stake_code"
 VENV_DIR="$PROJECT_DIR/venv"
 PYTHON="$VENV_DIR/bin/python"
-DJANGO_LOG="$PROJECT_DIR/db/logs/django.log"
-LISTENER_LOG="$PROJECT_DIR/db/logs/listener.log"
+DJANGO_LOG="$PROJECT_DIR/db/logs/django/django.log"
+LISTENER_LOG="$PROJECT_DIR/db/logs/listener/listener_pyrogram.log"
 PID_DIR="$PROJECT_DIR/pids"
 DJANGO_PID="$PID_DIR/django.pid"
 LISTENER_PID="$PID_DIR/listener.pid"
 
 # 创建必要的目录
-mkdir -p "$PROJECT_DIR/db/logs"
+mkdir -p "$PROJECT_DIR/db/logs/listener"
+mkdir -p "$PROJECT_DIR/db/logs/django"
 mkdir -p "$PID_DIR"
 
 # 进入项目目录
@@ -220,7 +221,7 @@ show_status() {
     echo "📋 查看日志："
     echo "   Django:   tail -f $DJANGO_LOG"
     echo "   Listener: tail -f $LISTENER_LOG"
-    echo "   Bypass:   tail -f $PROJECT_DIR/db/logs/bypass.log"
+    echo "   Bypass:   tail -f $PROJECT_DIR/db/logs/django/bypass.log"
 }
 
 # 主逻辑

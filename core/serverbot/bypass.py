@@ -28,8 +28,8 @@ if os.path.exists(config_path):
 else:
     raise ImportError(f"无法找到配置文件: {config_path}")
 
-# 配置过盾日志
-log_dir = os.path.join(project_root, 'db', 'logs')
+# 配置过盾日志（属于 Django 服务）
+log_dir = os.path.join(project_root, 'db', 'logs', 'django')
 os.makedirs(log_dir, exist_ok=True)
 bypass_log_file = os.path.join(log_dir, 'bypass.log')
 
@@ -46,7 +46,16 @@ if not bypass_logger.handlers:
     with _handler_lock:
         # 双重检查，防止多线程环境下重复添加
         if not bypass_logger.handlers:
-            file_handler = logging.FileHandler(bypass_log_file, encoding='utf-8')
+            # 使用 TimedRotatingFileHandler 实现每日轮转
+            # when='midnight' 表示每天午夜轮转
+            # backupCount=30 表示保留30天的备份
+            file_handler = logging.handlers.TimedRotatingFileHandler(
+                bypass_log_file,
+                when='midnight',
+                interval=1,
+                backupCount=30,
+                encoding='utf-8'
+            )
             file_handler.setLevel(logging.DEBUG)
             
             # 统一的时间戳格式（与其他模块保持一致）

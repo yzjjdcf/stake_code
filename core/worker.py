@@ -20,18 +20,35 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'manager.settings')
 django.setup()
 
 # 配置日志（与 listener.py 保持一致）
-log_dir = os.path.join(project_root, 'db', 'logs')
+log_dir = os.path.join(project_root, 'db', 'logs', 'listener')
 os.makedirs(log_dir, exist_ok=True)
-log_file = os.path.join(log_dir, 'listener.log')  # 使用同一个日志文件
+log_file = os.path.join(log_dir, 'worker.log')  # worker 日志文件
+
+# 使用 TimedRotatingFileHandler 实现每日轮转
+from logging.handlers import TimedRotatingFileHandler
+file_handler = TimedRotatingFileHandler(
+    log_file,
+    when='midnight',
+    interval=1,
+    backupCount=30,  # 保留30天的备份
+    encoding='utf-8'
+)
+file_handler.setLevel(logging.INFO)
+file_handler.setFormatter(logging.Formatter(
+    '[%(asctime)s] %(levelname)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+))
+
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(logging.Formatter(
+    '[%(asctime)s] %(levelname)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+))
 
 logging.basicConfig(
     level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
-    handlers=[
-        logging.FileHandler(log_file, encoding='utf-8'),
-        logging.StreamHandler(sys.stdout)
-    ]
+    handlers=[file_handler, console_handler]
 )
 
 logger = logging.getLogger(__name__)

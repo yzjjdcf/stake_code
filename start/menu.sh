@@ -72,11 +72,11 @@ show_status() {
 
 # 查看 Django 日志
 view_django_log() {
-    echo -e "${YELLOW}📋 查看 Django 日志 (Ctrl+C 退出)...${NC}"
+    echo -e "${YELLOW}📋 查看 Django 日志 (按 Ctrl+Q 退出)...${NC}"
     echo ""
-    DJANGO_LOG="$PROJECT_DIR/db/logs/django.log"
+    DJANGO_LOG="$PROJECT_DIR/db/logs/django/django.log"
     if [ -f "$DJANGO_LOG" ]; then
-        tail -f "$DJANGO_LOG"
+        (trap 'exit' QUIT; tail -f "$DJANGO_LOG")
     else
         echo -e "${RED}⚠️  日志文件不存在: $DJANGO_LOG${NC}"
         read -p "按回车键继续..."
@@ -85,11 +85,14 @@ view_django_log() {
 
 # 查看 Listener 日志
 view_listener_log() {
-    echo -e "${YELLOW}📋 查看 Listener 日志 (Ctrl+C 退出)...${NC}"
+    echo -e "${YELLOW}📋 查看 Listener 日志 (按 Ctrl+Q 退出)...${NC}"
     echo ""
-    LISTENER_LOG="$PROJECT_DIR/db/logs/listener.log"
+    LISTENER_LOG="$PROJECT_DIR/db/logs/listener/listener_pyrogram.log"
+    if [ ! -f "$LISTENER_LOG" ]; then
+        LISTENER_LOG="$PROJECT_DIR/db/logs/listener/worker.log"
+    fi
     if [ -f "$LISTENER_LOG" ]; then
-        tail -f "$LISTENER_LOG"
+        (trap 'exit' QUIT; tail -f "$LISTENER_LOG")
     else
         echo -e "${RED}⚠️  日志文件不存在: $LISTENER_LOG${NC}"
         read -p "按回车键继续..."
@@ -98,11 +101,11 @@ view_listener_log() {
 
 # 查看过盾日志
 view_bypass_log() {
-    echo -e "${YELLOW}📋 查看过盾日志 (Ctrl+C 退出)...${NC}"
+    echo -e "${YELLOW}📋 查看过盾日志 (按 Ctrl+Q 退出)...${NC}"
     echo ""
-    BYPASS_LOG="$PROJECT_DIR/db/logs/bypass.log"
+    BYPASS_LOG="$PROJECT_DIR/db/logs/django/bypass.log"
     if [ -f "$BYPASS_LOG" ]; then
-        tail -f "$BYPASS_LOG"
+        (trap 'exit' QUIT; tail -f "$BYPASS_LOG")
     else
         echo -e "${RED}⚠️  日志文件不存在: $BYPASS_LOG${NC}"
         read -p "按回车键继续..."
@@ -111,13 +114,14 @@ view_bypass_log() {
 
 # 同时查看所有日志
 view_all_logs() {
-    echo -e "${YELLOW}📋 同时查看所有日志 (Ctrl+C 退出)...${NC}"
+    echo -e "${YELLOW}📋 同时查看所有日志 (按 Ctrl+Q 退出)...${NC}"
     echo ""
-    LOG_DIR="$PROJECT_DIR/db/logs"
-    if [ -f "$LOG_DIR/django.log" ] || [ -f "$LOG_DIR/listener.log" ] || [ -f "$LOG_DIR/bypass.log" ]; then
-        tail -f "$LOG_DIR"/*.log 2>/dev/null
+    LISTENER_DIR="$PROJECT_DIR/db/logs/listener"
+    DJANGO_DIR="$PROJECT_DIR/db/logs/django"
+    if [ -d "$LISTENER_DIR" ] || [ -d "$DJANGO_DIR" ]; then
+        (trap 'exit' QUIT; tail -f "$LISTENER_DIR"/*.log "$DJANGO_DIR"/*.log 2>/dev/null)
     else
-        echo -e "${RED}⚠️  日志文件不存在${NC}"
+        echo -e "${RED}⚠️  日志目录不存在${NC}"
         read -p "按回车键继续..."
     fi
 }

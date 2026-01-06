@@ -165,7 +165,7 @@ LOG_LEVEL = 'INFO'  # DEBUG, INFO, WARNING, ERROR
 
 # ==================== OpenAI 配置 ====================
 # 第三方 ChatGPT API 配置（用于识别视频中的代码）
-# API Endpoint
+# API URL（完整的请求地址）
 OPENAI_API_BASE_URL = 'https://api.gpt.ge/v1/chat/completions'
 # API Key（用于 ChatGPT 识别视频中的代码）
 # 如果不需要视频识别功能，可以留空或注释掉

@@ -29,15 +29,9 @@ if os.path.exists(config_path):
     TELEGRAM_API_HASH = config_module.TELEGRAM_API_HASH
     TELEGRAM_PROXY = config_module.TELEGRAM_PROXY
     TELEGRAM_SESSION_FILE = config_module.TELEGRAM_SESSION_FILE
-    TELEGRAM_CHANNELS = getattr(config_module, 'TELEGRAM_CHANNELS', {})
-    TELEGRAM_TARGET_CHANNEL = getattr(config_module, 'TELEGRAM_TARGET_CHANNEL', None)
-
     OPENAI_API_KEY = getattr(config_module, 'OPENAI_API_KEY', '')
     OPENAI_API_BASE_URL = getattr(config_module, 'OPENAI_API_BASE_URL', 'https://api.gpt.ge/v1/chat/completions')
     OPENAI_MODEL = getattr(config_module, 'OPENAI_MODEL', 'gpt-4o')
-
-    if TELEGRAM_TARGET_CHANNEL and TELEGRAM_TARGET_CHANNEL not in TELEGRAM_CHANNELS:
-        TELEGRAM_CHANNELS[TELEGRAM_TARGET_CHANNEL] = 'default_parser'
 else:
     raise ImportError(f"无法找到配置文件: {config_path}")
 
@@ -93,9 +87,16 @@ def parse_code_rains_team(text):
             return line
     return None
 
-def parse_code_daily_code(text):
-    """解析 Daily Code 频道的代码"""
+def parse_code_daily_code(text, message=None, has_video=False):
+    """
+    解析 Daily Code 频道的代码（同步版本，用于纯文字）
+    支持两种情况：
+    1. 有视频+文字：使用 parse_code_daily_code_async（异步版本）
+    2. 纯文字：从文本中解析
+    """
     import re
+    
+    # 纯文字消息的解析
     if not text:
         return None
     lines = text.split('\n')
@@ -112,6 +113,200 @@ def parse_code_daily_code(text):
                 return code.lower()
     return None
 
+async def parse_code_daily_code_async(text, message=None, has_video=False):
+    """
+    解析 Daily Code 频道的代码（异步版本，用于视频）
+    支持两种情况：
+    1. 有视频+文字：从视频的倒数第十帧中提取代码（使用 OCR）
+    2. 纯文字：从文本中解析
+    """
+    import re
+    import tempfile
+    import os
+    import subprocess
+    import base64
+    
+    # 如果有视频，从视频的倒数第十帧中提取代码
+    if has_video and message:
+        try:
+            # 先尝试从 caption 中解析（更快）
+            caption_text = message.caption or ""
+            if caption_text:
+                lines = caption_text.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    match = re.search(r'[Cc]ode[：:]\s*([a-z0-9]+)', line, re.IGNORECASE)
+                    if match:
+                        code = match.group(1).strip()
+                        if code.startswith('@'):
+                            continue
+                        if re.match(r'^[a-z0-9]+$', code) and len(code) >= 10:
+                            return code.lower()
+            
+            # 如果 caption 中没有，从视频帧中提取
+            logger.info("📹 开始从视频中提取代码（倒数第十帧）...")
+            
+            # 下载视频
+            video_path = await message.download(in_memory=False)
+            logger.info(f"✅ 视频已下载: {video_path}")
+            
+            # 使用 ffmpeg 提取倒数第十帧
+            temp_dir = tempfile.gettempdir()
+            frame_path = os.path.join(temp_dir, f"frame_{message.id}.jpg")
+            
+            try:
+                # 获取视频帧率
+                fps_result = subprocess.run(
+                    ['ffprobe', '-v', 'error', '-select_streams', 'v:0', 
+                     '-show_entries', 'stream=r_frame_rate', 
+                     '-of', 'default=noprint_wrappers=1:nokey=1', video_path],
+                    capture_output=True,
+                    text=True
+                )
+                
+                # 获取视频时长
+                duration_result = subprocess.run(
+                    ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', 
+                     '-of', 'default=noprint_wrappers=1:nokey=1', video_path],
+                    capture_output=True,
+                    text=True
+                )
+                
+                if duration_result.returncode == 0:
+                    duration = float(duration_result.stdout.strip())
+                    
+                    # 计算帧率
+                    fps = 30.0  # 默认帧率
+                    if fps_result.returncode == 0:
+                        fps_str = fps_result.stdout.strip()
+                        if '/' in fps_str:
+                            num, den = map(int, fps_str.split('/'))
+                            fps = num / den if den > 0 else 30.0
+                        else:
+                            fps = float(fps_str) if fps_str else 30.0
+                    
+                    # 计算倒数第十帧的时间点（倒数第十帧 = 总时长 - 10/fps）
+                    frame_time = max(0, duration - 10.0 / fps)
+                    logger.info(f"📊 视频时长: {duration:.2f}秒, 帧率: {fps:.2f}fps, 提取时间点: {frame_time:.2f}秒")
+                    
+                    # 提取帧
+                    extract_result = subprocess.run(
+                        ['ffmpeg', '-i', video_path, '-ss', str(frame_time), 
+                         '-vframes', '1', '-q:v', '2', '-y', frame_path],
+                        capture_output=True,
+                        stderr=subprocess.PIPE
+                    )
+                    
+                    if extract_result.returncode != 0:
+                        logger.error(f"❌ 提取视频帧失败: {extract_result.stderr.decode()}")
+                        return None
+                    
+                    logger.info(f"✅ 视频帧已提取: {frame_path}")
+                    
+                    # 使用第三方 API 识别图片中的代码（直接 HTTP 请求，不使用 OpenAI SDK）
+                    if not OPENAI_API_KEY:
+                        logger.warning("⚠️ API Key 未配置，无法识别视频中的代码")
+                        return None
+                    
+                    import requests
+                    
+                    # 读取图片并转换为 base64
+                    with open(frame_path, 'rb') as image_file:
+                        image_data = image_file.read()
+                        image_base64 = base64.b64encode(image_data).decode('utf-8')
+                        
+                        # 从 config 读取所有配置
+                        api_url = OPENAI_API_BASE_URL  # 完整的请求地址
+                        api_key = OPENAI_API_KEY  # API Key
+                        model = OPENAI_MODEL  # 模型名称
+                        
+                        logger.info(f"🔗 请求地址: {api_url}")
+                        logger.info(f"🔑 使用模型: {model}")
+                        logger.info("🤖 正在使用第三方 API 识别图片中的代码...")
+                        
+                        # 构建请求头（使用 config 中的 key）
+                        headers = {
+                            'Authorization': f'Bearer {api_key}',
+                            'Content-Type': 'application/json'
+                        }
+                        
+                        # 构建请求体（使用 config 中的 model）
+                        payload = {
+                            "model": model,
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {
+                                            "type": "text",
+                                            "text": "请识别图片中的代码，只返回代码本身，不要其他文字。代码通常是字母和数字的组合，长度在8-25个字符之间。"
+                                        },
+                                        {
+                                            "type": "image_url",
+                                            "image_url": {
+                                                "url": f"data:image/jpeg;base64,{image_base64}"
+                                            }
+                                        }
+                                    ]
+                                }
+                            ],
+                            "max_tokens": 50
+                        }
+                        
+                        # 发送 POST 请求
+                        response = requests.post(
+                            api_url,
+                            headers=headers,
+                            json=payload,
+                            timeout=30
+                        )
+                        
+                        # 检查响应
+                        if response.status_code != 200:
+                            logger.error(f"❌ API 请求失败: HTTP {response.status_code}, 响应: {response.text[:200]}")
+                            return None
+                        
+                        # 解析响应
+                        response_data = response.json()
+                        if 'choices' not in response_data or len(response_data['choices']) == 0:
+                            logger.error(f"❌ API 响应格式错误: {response_data}")
+                            return None
+                        
+                        code_text = response_data['choices'][0]['message']['content'].strip()
+                        logger.info(f"📝 API 识别结果: {code_text}")
+                        
+                        # 清理代码文本，只保留字母和数字
+                        code = re.sub(r'[^a-z0-9]', '', code_text.lower())
+                        if len(code) >= 10:
+                            logger.info(f"✅ 从视频中提取的代码: {code}")
+                            return code
+                        else:
+                            logger.warning(f"⚠️ 提取的代码长度不足: {code}")
+                            return None
+                else:
+                    logger.error("❌ 无法获取视频时长")
+                    return None
+            finally:
+                # 清理临时文件
+                if video_path and os.path.exists(video_path):
+                    try:
+                        os.remove(video_path)
+                    except:
+                        pass
+                if frame_path and os.path.exists(frame_path):
+                    try:
+                        os.remove(frame_path)
+                    except:
+                        pass
+        except Exception as e:
+            logger.error(f"❌ 从视频中提取代码失败: {e}", exc_info=True)
+            return None
+    
+    # 纯文字消息的解析（回退逻辑）
+    return parse_code_daily_code(text, message=None, has_video=False)
+
 def parse_code_default(text):
     """默认解析器"""
     if text:
@@ -126,18 +321,35 @@ CODE_PARSERS = {
 }
 
 # ================= 5. 配置日志 =================
-log_dir = os.path.join(project_root, 'db', 'logs')
+log_dir = os.path.join(project_root, 'db', 'logs', 'listener')
 os.makedirs(log_dir, exist_ok=True)
 log_file = os.path.join(log_dir, 'listener_pyrogram.log')
 
+# 使用 TimedRotatingFileHandler 实现每日轮转
+from logging.handlers import TimedRotatingFileHandler
+file_handler = TimedRotatingFileHandler(
+    log_file,
+    when='midnight',
+    interval=1,
+    backupCount=30,  # 保留30天的备份
+    encoding='utf-8'
+)
+file_handler.setLevel(logging.DEBUG)  # 临时改为 DEBUG 以便调试
+file_handler.setFormatter(logging.Formatter(
+    '[%(asctime)s] %(levelname)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+))
+
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.DEBUG)  # 临时改为 DEBUG 以便调试
+console_handler.setFormatter(logging.Formatter(
+    '[%(asctime)s] %(levelname)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+))
+
 logging.basicConfig(
     level=logging.DEBUG,  # 临时改为 DEBUG 以便调试
-    format='[%(asctime)s] %(levelname)s: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
-    handlers=[
-        logging.FileHandler(log_file, encoding='utf-8'),
-        logging.StreamHandler(sys.stdout)
-    ]
+    handlers=[file_handler, console_handler]
 )
 
 logger = logging.getLogger(__name__)
@@ -218,6 +430,9 @@ app = Client(
 async def handle_channel_message(client, message):
     """处理频道消息"""
     try:
+        # 忽略无法解析的频道（可能是 session 中残留的旧频道）
+        if not message or not message.chat:
+            return
         # 获取频道信息
         if not message.chat:
             return  # 没有聊天信息，忽略
@@ -247,8 +462,9 @@ async def handle_channel_message(client, message):
         parser_name = channel_id_map.get(chat_id, 'default_parser')
         parser_func = CODE_PARSERS.get(parser_name, parse_code_default)
 
-        # 提取消息文本
+        # 提取消息文本和媒体信息
         raw_text = message.text or message.caption or ""
+        has_video = message.video is not None
 
         # 记录收到消息（添加调试信息）
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -256,6 +472,8 @@ async def handle_channel_message(client, message):
         logger.info(f"来源频道: {chat_title} ({chat_id})")
         logger.info(f"频道类型: {message.chat.type.name if message.chat else 'Unknown'}")
         logger.info(f"消息ID: {message.id}")
+        if has_video:
+            logger.info(f"消息类型: 视频+文字")
         logger.info(f"消息内容: {raw_text[:200] if raw_text else '[媒体文件]'}")
 
         # 如果消息为空，跳过处理
@@ -263,8 +481,13 @@ async def handle_channel_message(client, message):
             logger.info("消息为空，跳过处理")
             return
 
-        # 解析代码
-        code = parser_func(raw_text)
+        # 解析代码（对于 daily_code_parser，如果有视频，传递视频信息）
+        if parser_name == 'daily_code_parser' and has_video:
+            # 有视频的情况，需要异步处理
+            code = await parse_code_daily_code_async(raw_text, message=message, has_video=True)
+        else:
+            # 纯文字的情况，使用原来的解析方式
+            code = parser_func(raw_text)
 
         if not code:
             logger.warning(f"⚠️ 无法从消息中提取代码（解析器: {parser_name}）")
@@ -276,15 +499,10 @@ async def handle_channel_message(client, message):
         # 记录收到消息的时间戳
         message_received_time = time.perf_counter()
 
-        # 检查是否是测试频道
+        # 检查是否是测试频道（根据频道ID判断）
         filter_username = None
-        channel_key = None
-        for key, parser in TELEGRAM_CHANNELS.items():
-            if channel_id_map.get(chat_id) == parser:
-                channel_key = key
-                break
-
-        is_test_channel = (channel_key == 'stake_cn_chat_room')
+        # stake_cn_chat_room 的频道ID是 -1003315955015
+        is_test_channel = (chat_id == -1003315955015)
         if is_test_channel:
             filter_username = 'yzjjdcf'
             logger.debug(f"🧪 测试频道模式：仅发送给账号名为 '{filter_username}' 的账号")
