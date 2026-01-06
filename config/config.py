@@ -31,18 +31,18 @@ TELEGRAM_API_HASH = 'bb23c410c63a820d7c4209e0606d4aea'
 # 多频道配置（支持多个频道，每个频道有不同的解析规则）
 # 格式：{频道ID或用户名: 解析器名称}
 # 注意：可以使用频道用户名（如 'stake_cn_chat_room'）或频道ID（如 '-1003315955015'）
-TELEGRAM_CHANNELS = {
-    'HighRollersStake': 'high_rollers_parser',  # 频道1：HighRollersStake
-    'RainsTEAM': 'rains_team_parser',  # 频道2：RainsTEAM（复杂消息格式，无空格代码）
-    'stakeimgantengofficial': 'rains_team_parser',  # 频道3：Stake.com - Challenge Info & Bonus Drop（使用 rains_team_parser）
-    # 'Stakelivechallenges': 'rains_team_parser',  # 频道4：Daily Code 频道（使用 daily_code_parser）
-    # 'StakecomDailyDrops': 'stakecom_daily_drops_parser',  # 频道5：Stake.com - Daily Drops（支持视频和文本）
-    'stake_cn_chat_room': 'rains_team_parser',  # 频道6：测试频道（使用 stakecom_daily_drops_parser 进行测试）
-    # '-1003315955015': 'stakecom_daily_drops_parser',  # 频道6的ID（stake中文避风港），确保能匹配到
-}
+# TELEGRAM_CHANNELS = {
+#     'HighRollersStake': 'high_rollers_parser',  # 频道1：HighRollersStake
+#     'RainsTEAM': 'rains_team_parser',  # 频道2：RainsTEAM（复杂消息格式，无空格代码）
+#     'stakeimgantengofficial': 'rains_team_parser',  # 频道3：Stake.com - Challenge Info & Bonus Drop（使用 rains_team_parser）
+#     # 'Stakelivechallenges': 'rains_team_parser',  # 频道4：Daily Code 频道（使用 daily_code_parser）
+#     # 'StakecomDailyDrops': 'stakecom_daily_drops_parser',  # 频道5：Stake.com - Daily Drops（支持视频和文本）
+#     'stake_cn_chat_room': 'rains_team_parser',  # 频道6：测试频道（使用 stakecom_daily_drops_parser 进行测试）
+#     # '-1003315955015': 'stakecom_daily_drops_parser',  # 频道6的ID（stake中文避风港），确保能匹配到
+# }
 
 # 兼容旧配置（如果设置了 TELEGRAM_TARGET_CHANNEL，会自动添加到 TELEGRAM_CHANNELS）
-TELEGRAM_TARGET_CHANNEL = 'stake_cn_chat_room'  # 保留用于兼容
+# TELEGRAM_TARGET_CHANNEL = 'stake_cn_chat_room'  # 保留用于兼容
 
 # Telegram 代理配置（根据平台不同）
 # 会话文件路径（在 db/ 目录下）
@@ -169,9 +169,16 @@ LOG_LEVEL = 'INFO'  # DEBUG, INFO, WARNING, ERROR
 OPENAI_API_BASE_URL = 'https://api.gpt.ge/v1/chat/completions'
 # API Key（用于 ChatGPT 识别视频中的代码）
 # 如果不需要视频识别功能，可以留空或注释掉
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', 'sk-t9k1dFDN5BiApHUz63Ec585e880e4a6cAb64421bDc2e7650')  # 优先从环境变量读取，如果没有则使用默认值
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', 'sk-HPmHTarniTbZStbf5bF0Ec061fC748459e208e4fF93fAd39')  # 优先从环境变量读取，如果没有则使用默认值
 # 使用的模型（必须是支持图片分析的模型）
 OPENAI_MODEL = 'gpt-4o'  # 或使用其他支持图片分析的模型
+
+# ==================== OCR API 配置 ====================
+# OCR API 服务配置（formData 方式，用于识别视频中的代码）
+# API URL（基础地址，会自动拼接 /task/pic/ocr）
+OCR_API_URL = os.getenv('OCR_API_URL', 'https://api.gpt.ge/task/pic/ocr')  # 例如: 'https://api.example.com'
+# API Token（用于 Authorization header）
+OCR_API_TOKEN = os.getenv('OCR_API_TOKEN', '')  # Bearer Token
 
 # ==================== Turnstile 配置 ====================
 # Cloudflare Turnstile 配置（用于领取代码时的验证）

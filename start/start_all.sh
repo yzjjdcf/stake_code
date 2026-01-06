@@ -111,7 +111,7 @@ start_listener() {
     fi
     
     cd "$PROJECT_DIR/core" || exit 1
-    nohup "$PYTHON" listener.py > "$LISTENER_LOG" 2>&1 &
+    nohup "$PYTHON" -u listener.py > "$LISTENER_LOG" 2>&1 &
     LISTENER_PID_VALUE=$!
     cd "$PROJECT_DIR" || exit 1
     
@@ -245,8 +245,9 @@ case "${1:-start}" in
     restart)
         echo "🔄 重启所有服务..."
         echo ""
-        stop_listener
-        stop_django
+        # 停止服务（如果未运行，只显示警告，不阻止后续启动）
+        stop_listener || true
+        stop_django || true
         sleep 2
         start_django
         sleep 2
