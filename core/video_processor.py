@@ -2,6 +2,7 @@
 视频处理模块
 包含视频帧提取、代码区域识别等功能
 """
+import asyncio
 import os
 import logging
 import time
@@ -118,7 +119,13 @@ async def parse_code_daily_code_async(text, message=None, has_video=False, downl
             
             # 下载视频到临时目录
             download_start_time = time.perf_counter()
-            video_file_path = await download_func(message,in_memory=True)
+
+            result = download_func(message)
+            if asyncio.iscoroutine(result):
+                video_file_path = await result
+            else:
+                video_file_path = result
+
             download_elapsed_ms = int((time.perf_counter() - download_start_time) * 1000)
             
             # 获取文件大小
@@ -166,23 +173,23 @@ async def parse_code_daily_code_async(text, message=None, has_video=False, downl
                 code = None
                 
                 # 优先使用 Tesseract OCR（本地识别，速度快）
-                # code = recognize_code_with_tesseract(cropped_frame)
+                code = recognize_code_with_tesseract(cropped_frame)
                 
                 # 如果 Tesseract 识别失败，尝试 OCR API（formData 方式）
+                # if not code:
+                #     logger.info("🔄 尝试使用 OCR API 识别...")
+                #     # 使用 Pillow 压缩图片并转换为 base64（不保存文件）
+                #     compress_start_time = time.perf_counter()
+                #     image_base64 = compress_image_to_base64(cropped_frame, quality=75, max_size=(800, 800))
+                #     compress_elapsed_ms = int((time.perf_counter() - compress_start_time) * 1000)
+                #     logger.info(f"📸 图片压缩并转换为 base64 (耗时 {compress_elapsed_ms}ms) | 大小: {len(image_base64)} 字符")
+                #
+                #     # 使用 OCR API 识别（formData 方式）
+                #     code = recognize_code_with_ocr_api(image_base64=image_base64)
+                #
+                # # 如果 OCR API 也失败，使用 OpenAI API 识别（最后备选）
                 if not code:
-                    logger.info("🔄 尝试使用 OCR API 识别...")
-                    # 使用 Pillow 压缩图片并转换为 base64（不保存文件）
-                    compress_start_time = time.perf_counter()
-                    image_base64 = compress_image_to_base64(cropped_frame, quality=75, max_size=(800, 800))
-                    compress_elapsed_ms = int((time.perf_counter() - compress_start_time) * 1000)
-                    logger.info(f"📸 图片压缩并转换为 base64 (耗时 {compress_elapsed_ms}ms) | 大小: {len(image_base64)} 字符")
-                    
-                    # 使用 OCR API 识别（formData 方式）
-                    code = recognize_code_with_ocr_api(image_base64=image_base64)
-                
-                # 如果 OCR API 也失败，使用 OpenAI API 识别（最后备选）
-                if not code:
-                    logger.info("🔄 OCR API 识别失败，尝试使用 OpenAI API 识别...")
+                    logger.info("尝试使用 OpenAI API 识别...")
                     # 使用 Pillow 压缩图片并转换为 base64（不保存文件）
                     compress_start_time = time.perf_counter()
                     image_base64 = compress_image_to_base64(cropped_frame, quality=75, max_size=(800, 800))

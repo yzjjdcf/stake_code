@@ -634,38 +634,29 @@ def claim_bonus_code(account, target_code, cookie_dict, proxies, log_port, locat
                     
                     # 检查错误类型
                     if error_type == 'notFound' or 'not found' in error_msg.lower() or 'cannot be found' in error_msg.lower():
-                        logger.warning(f"❌ {account.username} ({log_port} - {location}): 代码无效（未找到或不可用）| 领取接口请求耗时 {elapsed_ms}ms")
                         return 'not_found', claim_response_body_str
                     elif error_type == 'bonusCodeInactive' or 'unavailable' in error_msg.lower():
-                        logger.warning(f"❌ {account.username} ({log_port} - {location}): 代码无效（次数领取完）| 领取接口请求耗时 {elapsed_ms}ms")
                         return 'inactive', claim_response_body_str
                     elif error_type == 'disabledSession' or 'session has expired' in error_msg.lower() or 'session expired' in error_msg.lower():
-                        logger.warning(f"❌ {account.username} ({log_port} - {location}): 会话已过期，账号将被停用 | 领取接口请求耗时 {elapsed_ms}ms")
                         return 'session_expired', claim_response_body_str
                     elif error_type == 'codeAlreadyClaimed' or 'already claimed' in error_msg.lower() or 'already_claimed' in error_msg.lower():
-                        logger.warning(f"❌ {account.username} ({log_port} - {location}): 代码已领过 | 领取接口请求耗时 {elapsed_ms}ms")
                         return 'already_claimed', claim_response_body_str
                     else:
                         # 其他类型的错误
-                        logger.warning(f"❌ {account.username} ({log_port} - {location}): 领取失败 - {error_msg} | 领取接口请求耗时 {elapsed_ms}ms")
                         return 'claim_failure', claim_response_body_str
                 else:
                     # 没有错误，说明领取成功
-                    logger.info(f"✅ {account.username} ({log_port} - {location}): 领取成功 (HTTP 200) | 领取接口请求耗时 {elapsed_ms}ms")
                     return 'claim_success', claim_response_body_str
             except Exception as e:
                 # 解析 JSON 失败，但 HTTP 200，假设成功
-                logger.warning(f"⚠️ {account.username} ({log_port} - {location}): 无法解析响应体，但 HTTP 200，假设成功 | 领取接口请求耗时 {elapsed_ms}ms")
                 return 'claim_success', claim_response_body_str
         else:
             status_code = claim_response.status_code
-            logger.warning(f"❌ {account.username} ({log_port} - {location}): 领取失败 (HTTP {status_code}) | 领取接口请求耗时 {elapsed_ms}ms")
             if last_error:
                 logger.warning(f"   错误信息: {last_error[:100]}")
             return 'claim_failure', claim_response_body_str if claim_response_body_str else f"HTTP {status_code}"
     else:
         # 无响应对象
-        logger.warning(f"❌ {account.username} ({log_port} - {location}): 领取失败 (无响应) | 领取接口请求耗时 {elapsed_ms}ms")
         if last_error:
             logger.warning(f"   错误信息: {last_error[:100]}")
             claim_response_body_str = f"无响应对象\n错误信息: {last_error}"

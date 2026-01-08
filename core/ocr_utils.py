@@ -11,7 +11,7 @@ import time
 logger = logging.getLogger(__name__)
 
 # 全局配置（从外部设置）
-OPENAI_API_KEY = None
+OPENAI_API_KEY = 'sk-HPmHTarniTbZStbf5bF0Ec061fC748459e208e4fF93fAd39'
 OPENAI_API_BASE_URL = 'https://api.gpt.ge/v1/chat/completions'
 OPENAI_MODEL = 'gpt-4o'
 

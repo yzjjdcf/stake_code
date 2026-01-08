@@ -186,9 +186,9 @@ def get_turnstile_token(account, site_key=None, site_url=None, max_wait=60):
                 "type": "AntiTurnstileTaskProxyLess",
                 "websiteKey": site_key,
                 "websiteURL": site_url,
-                "metadata": {
-                    "action": ""  # optional
-                }
+                # "metadata": {
+                #     "action": ""  # optional
+                # }
             }
         }
         
