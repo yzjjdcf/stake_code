@@ -81,6 +81,7 @@ def compress_image_to_base64(image_frame, quality=75, max_size=(800, 800)):
 def recognize_code_with_tesseract(image_frame):
     """
     使用 Tesseract OCR 识别图片中的代码（本地识别，速度快）
+    使用 OpenCV 预处理：转灰度 -> 二值化（OTSU自动阈值）-> 去噪声
     
     Args:
         image_frame: OpenCV 读取的图片帧（numpy array，BGR 格式）
@@ -95,26 +96,30 @@ def recognize_code_with_tesseract(image_frame):
         ocr_start_time = time.perf_counter()
         logger.info("🤖 正在使用 Tesseract OCR 识别图片中的代码...")
         
-        # Tesseract 需要 PIL Image 或文件路径
-        # 将 OpenCV BGR 格式转换为 RGB 格式
-        rgb_frame = cv2.cvtColor(image_frame, cv2.COLOR_BGR2RGB)
+        # 1. 转为灰度图像
+        gray = cv2.cvtColor(image_frame, cv2.COLOR_BGR2GRAY)
         
-        # 转换为 PIL Image
-        from PIL import Image
-        pil_image = Image.fromarray(rgb_frame)
+        # 2. 二值化处理（使用 OTSU 自动阈值）
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         
-        # 使用 Tesseract OCR 识别（只识别字母和数字）
-        # --psm 7: 单行文本
+        # 3. 去噪声
+        thresh = cv2.medianBlur(thresh, 3)
+        
+        # 4. 配置 Tesseract 参数
+        # --oem 3: 使用默认的 OCR 引擎模式
+        # --psm 6: 假设图像是单一统一文本块
         # -c tessedit_char_whitelist: 只识别字母和数字
-        custom_config = r'--psm 7 -c tessedit_char_whitelist=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-        text = pytesseract.image_to_string(pil_image, config=custom_config)
+        custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=abcdefghijklmnopqrstuvwxyz0123456789'
+        
+        # 5. 使用 Tesseract 进行 OCR 识别
+        text = pytesseract.image_to_string(thresh, config=custom_config)
         
         ocr_elapsed_ms = int((time.perf_counter() - ocr_start_time) * 1000)
         logger.info(f"⏱️ Tesseract OCR 识别耗时: {ocr_elapsed_ms}ms")
         logger.info(f"📝 Tesseract OCR 识别结果: {text.strip()}")
         
-        # 清理文本，只保留字母和数字
-        code = re.sub(r'[^a-z0-9]', '', text.lower())
+        # 清理文本，只保留字母和数字（保留原始大小写）
+        code = re.sub(r'[^a-zA-Z0-9]', '', text.strip())
         
         if len(code) >= 8 and len(code) <= 25:
             logger.info(f"✅ Tesseract OCR 识别代码: {code}")

@@ -178,7 +178,7 @@ OPENAI_MODEL = 'gpt-4o'  # 或使用其他支持图片分析的模型
 # API URL（基础地址，会自动拼接 /task/pic/ocr）
 OCR_API_URL = os.getenv('OCR_API_URL', 'https://api.gpt.ge/task/pic/ocr')  # 例如: 'https://api.example.com'
 # API Token（用于 Authorization header）
-OCR_API_TOKEN = os.getenv('OCR_API_TOKEN', '')  # Bearer Token
+OCR_API_TOKEN = os.getenv('OCR_API_TOKEN', 'sk-HPmHTarniTbZStbf5bF0Ec061fC748459e208e4fF93fAd39')  # Bearer Token
 
 # ==================== Turnstile 配置 ====================
 # Cloudflare Turnstile 配置（用于领取代码时的验证）
@@ -187,3 +187,9 @@ OCR_API_TOKEN = os.getenv('OCR_API_TOKEN', '')  # Bearer Token
 TURNSTILE_SITE_KEY = os.getenv('TURNSTILE_SITE_KEY', '0x4AAAAAAAGD4gMGOTFnvupz')  # 优先从环境变量读取，如果没有则使用空字符串（需要手动配置）
 # Site URL（领取代码时的页面 URL）
 TURNSTILE_SITE_URL = 'https://stake.com/'  # 默认值，可以根据需要修改
+
+# ==================== WebSocket 配置 ====================
+# WebSocket 服务器公网 IP（用于生成 SSL 证书，支持外部访问）
+# 如果服务器有公网 IP，请填写实际的 IP 地址
+# 如果不填写，证书将只包含 localhost，可能导致外部连接失败
+WEBSOCKET_PUBLIC_IP = os.getenv('WEBSOCKET_PUBLIC_IP', '146.103.42.142')  # 优先从环境变量读取，如果没有则使用默认值

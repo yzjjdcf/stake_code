@@ -196,6 +196,13 @@ async def parse_code_daily_code_async(text, message=None, has_video=False, downl
                     compress_elapsed_ms = int((time.perf_counter() - compress_start_time) * 1000)
                     logger.info(f"📸 图片压缩并转换为 base64 (耗时 {compress_elapsed_ms}ms) | 大小: {len(image_base64)} 字符")
                     
+                    # # 打印 base64 图片（用于调试）
+                    # logger.info(f"📋 Base64 图片数据: {image_base64[:200]}..." if len(image_base64) > 200 else f"📋 Base64 图片数据: {image_base64}")
+                    # print(f"\n{'='*60}")
+                    # print(f"Base64 图片数据:")
+                    # print(f"{image_base64}")
+                    # print(f"{'='*60}\n")
+                    
                     # 使用 OpenAI API 识别
                     code = recognize_code_with_api(image_base64=image_base64)
                 

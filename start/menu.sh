@@ -23,25 +23,50 @@ show_menu() {
     echo -e "${GREEN}3)${NC} 重启所有服务"
     echo -e "${GREEN}4)${NC} 查看服务状态"
     echo ""
-    echo -e "${YELLOW}5)${NC} 查看 Django 日志"
-    echo -e "${YELLOW}6)${NC} 查看 Listener 日志"
-    echo -e "${YELLOW}7)${NC} 查看过盾日志"
-    echo -e "${YELLOW}8)${NC} 同时查看所有日志"
+    echo -e "${GREEN}1a)${NC} 仅启动 Django"
+    echo -e "${GREEN}1b)${NC} 仅启动 Listener"
+    echo -e "${GREEN}2a)${NC} 仅停止 Django"
+    echo -e "${GREEN}2b)${NC} 仅停止 Listener"
+    echo ""
+    echo -e "${YELLOW}5)${NC} 查看 Django 日志 (按 q 退出)"
+    echo -e "${YELLOW}6)${NC} 查看 Listener 日志 (按 q 退出)"
+    echo -e "${YELLOW}7)${NC} 查看过盾日志 (按 q 退出)"
+    echo -e "${YELLOW}8)${NC} 同时查看所有日志 (按 q 退出)"
     echo ""
     echo -e "${BLUE}9)${NC} 运行数据库迁移"
-    echo -e "${BLUE}10)${NC} 检查 Listener 状态"
-    echo -e "${BLUE}11)${NC} 校准服务器时间"
-    echo -e "${BLUE}12)${NC} 实时时间对比（每秒更新）"
+    echo -e "${BLUE}10)${NC} 创建超级管理员"
+    echo -e "${BLUE}11)${NC} 检查 Listener 状态"
+    echo -e "${BLUE}12)${NC} 校准服务器时间"
+    echo -e "${BLUE}13)${NC} 实时时间对比（每秒更新）"
     echo ""
     echo -e "${RED}0)${NC} 退出"
     echo ""
-    echo -n "请选择 [0-12]: "
+    echo -n "请选择 [0-13, 1a-2b]: "
 }
 
 # 启动所有服务
 start_services() {
     echo -e "${GREEN}🚀 启动所有服务...${NC}"
-    bash "$PROJECT_DIR/start/start_all.sh" start
+    # 捕获所有输出，只显示脚本的控制信息，过滤掉所有服务日志
+    bash "$PROJECT_DIR/start/start_all.sh" start 2>&1 | grep -vE '^\[|^\[[0-9]+\]\[t|^tail:|CryptographyDeprecationWarning|listener_tdlib\.py:|^[[:space:]]*$' || true
+    echo ""
+    read -p "按回车键继续..."
+}
+
+# 仅启动 Django
+start_django_only() {
+    echo -e "${GREEN}🚀 启动 Django 服务...${NC}"
+    # 捕获所有输出，只显示脚本的控制信息，过滤掉所有服务日志
+    bash "$PROJECT_DIR/start/start_all.sh" start_django 2>&1 | grep -vE '^\[|^\[[0-9]+\]\[t|^tail:|CryptographyDeprecationWarning|listener_tdlib\.py:|^[[:space:]]*$' || true
+    echo ""
+    read -p "按回车键继续..."
+}
+
+# 仅启动 Listener
+start_listener_only() {
+    echo -e "${GREEN}🚀 启动 Listener 服务...${NC}"
+    # 捕获所有输出，只显示脚本的控制信息，过滤掉所有服务日志
+    bash "$PROJECT_DIR/start/start_all.sh" start_listener 2>&1 | grep -vE '^\[|^\[[0-9]+\]\[t|^tail:|CryptographyDeprecationWarning|listener_tdlib\.py:|^[[:space:]]*$' || true
     echo ""
     read -p "按回车键继续..."
 }
@@ -54,10 +79,27 @@ stop_services() {
     read -p "按回车键继续..."
 }
 
+# 仅停止 Django
+stop_django_only() {
+    echo -e "${RED}🛑 停止 Django 服务...${NC}"
+    bash "$PROJECT_DIR/start/start_all.sh" stop_django
+    echo ""
+    read -p "按回车键继续..."
+}
+
+# 仅停止 Listener
+stop_listener_only() {
+    echo -e "${RED}🛑 停止 Listener 服务...${NC}"
+    bash "$PROJECT_DIR/start/start_all.sh" stop_listener
+    echo ""
+    read -p "按回车键继续..."
+}
+
 # 重启所有服务
 restart_services() {
     echo -e "${YELLOW}🔄 重启所有服务...${NC}"
-    bash "$PROJECT_DIR/start/start_all.sh" restart
+    # 捕获所有输出，只显示脚本的控制信息，过滤掉所有服务日志
+    bash "$PROJECT_DIR/start/start_all.sh" restart 2>&1 | grep -vE '^\[|^\[[0-9]+\]\[t|^tail:|CryptographyDeprecationWarning|listener_tdlib\.py:|^[[:space:]]*$' || true
     echo ""
     read -p "按回车键继续..."
 }
@@ -72,11 +114,23 @@ show_status() {
 
 # 查看 Django 日志
 view_django_log() {
-    echo -e "${YELLOW}📋 查看 Django 日志 (按 Ctrl+Q 退出)...${NC}"
+    echo -e "${YELLOW}📋 查看 Django 日志 (按 q 退出，不会中断服务)...${NC}"
     echo ""
     DJANGO_LOG="$PROJECT_DIR/db/logs/django/django.log"
     if [ -f "$DJANGO_LOG" ]; then
-        (trap 'exit' QUIT; tail -f "$DJANGO_LOG")
+        tail -f "$DJANGO_LOG" &
+        TAIL_PID=$!
+        OLD_STTY=$(stty -g)
+        stty -echo -icanon min 1 time 0
+        while true; do
+            key=$(dd bs=1 count=1 2>/dev/null)
+            if [ "$key" = "q" ] || [ "$key" = "Q" ]; then
+                break
+            fi
+        done
+        stty "$OLD_STTY"
+        kill $TAIL_PID 2>/dev/null
+        wait $TAIL_PID 2>/dev/null
     else
         echo -e "${RED}⚠️  日志文件不存在: $DJANGO_LOG${NC}"
         read -p "按回车键继续..."
@@ -85,14 +139,34 @@ view_django_log() {
 
 # 查看 Listener 日志
 view_listener_log() {
-    echo -e "${YELLOW}📋 查看 Listener 日志 (按 Ctrl+Q 退出)...${NC}"
+    echo -e "${YELLOW}📋 查看 Listener 日志 (按 q 退出，不会中断服务)...${NC}"
     echo ""
-    LISTENER_LOG="$PROJECT_DIR/db/logs/listener/listener_pyrogram.log"
+    LISTENER_LOG="$PROJECT_DIR/db/logs/listener/listener_tdlib.log"
+    if [ ! -f "$LISTENER_LOG" ]; then
+        LISTENER_LOG="$PROJECT_DIR/db/logs/listener/listener_pyrogram.log"
+    fi
     if [ ! -f "$LISTENER_LOG" ]; then
         LISTENER_LOG="$PROJECT_DIR/db/logs/listener/worker.log"
     fi
     if [ -f "$LISTENER_LOG" ]; then
-        (trap 'exit' QUIT; tail -f "$LISTENER_LOG")
+        # 使用 tail -f 在后台运行，按 q 退出时只杀死 tail 进程，不会影响 listener
+        tail -f "$LISTENER_LOG" &
+        TAIL_PID=$!
+        # 保存当前终端设置
+        OLD_STTY=$(stty -g)
+        stty -echo -icanon min 1 time 0
+        # 等待用户按 q
+        while true; do
+            key=$(dd bs=1 count=1 2>/dev/null)
+            if [ "$key" = "q" ] || [ "$key" = "Q" ]; then
+                break
+            fi
+        done
+        # 恢复终端设置
+        stty "$OLD_STTY"
+        # 只杀死 tail 进程，不会影响 listener
+        kill $TAIL_PID 2>/dev/null
+        wait $TAIL_PID 2>/dev/null
     else
         echo -e "${RED}⚠️  日志文件不存在: $LISTENER_LOG${NC}"
         read -p "按回车键继续..."
@@ -101,11 +175,23 @@ view_listener_log() {
 
 # 查看过盾日志
 view_bypass_log() {
-    echo -e "${YELLOW}📋 查看过盾日志 (按 Ctrl+Q 退出)...${NC}"
+    echo -e "${YELLOW}📋 查看过盾日志 (按 q 退出，不会中断服务)...${NC}"
     echo ""
     BYPASS_LOG="$PROJECT_DIR/db/logs/django/bypass.log"
     if [ -f "$BYPASS_LOG" ]; then
-        (trap 'exit' QUIT; tail -f "$BYPASS_LOG")
+        tail -f "$BYPASS_LOG" &
+        TAIL_PID=$!
+        OLD_STTY=$(stty -g)
+        stty -echo -icanon min 1 time 0
+        while true; do
+            key=$(dd bs=1 count=1 2>/dev/null)
+            if [ "$key" = "q" ] || [ "$key" = "Q" ]; then
+                break
+            fi
+        done
+        stty "$OLD_STTY"
+        kill $TAIL_PID 2>/dev/null
+        wait $TAIL_PID 2>/dev/null
     else
         echo -e "${RED}⚠️  日志文件不存在: $BYPASS_LOG${NC}"
         read -p "按回车键继续..."
@@ -114,12 +200,24 @@ view_bypass_log() {
 
 # 同时查看所有日志
 view_all_logs() {
-    echo -e "${YELLOW}📋 同时查看所有日志 (按 Ctrl+Q 退出)...${NC}"
+    echo -e "${YELLOW}📋 同时查看所有日志 (按 q 退出，不会中断服务)...${NC}"
     echo ""
     LISTENER_DIR="$PROJECT_DIR/db/logs/listener"
     DJANGO_DIR="$PROJECT_DIR/db/logs/django"
     if [ -d "$LISTENER_DIR" ] || [ -d "$DJANGO_DIR" ]; then
-        (trap 'exit' QUIT; tail -f "$LISTENER_DIR"/*.log "$DJANGO_DIR"/*.log 2>/dev/null)
+        tail -f "$LISTENER_DIR"/*.log "$DJANGO_DIR"/*.log 2>/dev/null &
+        TAIL_PID=$!
+        OLD_STTY=$(stty -g)
+        stty -echo -icanon min 1 time 0
+        while true; do
+            key=$(dd bs=1 count=1 2>/dev/null)
+            if [ "$key" = "q" ] || [ "$key" = "Q" ]; then
+                break
+            fi
+        done
+        stty "$OLD_STTY"
+        kill $TAIL_PID 2>/dev/null
+        wait $TAIL_PID 2>/dev/null
     else
         echo -e "${RED}⚠️  日志目录不存在${NC}"
         read -p "按回车键继续..."
@@ -136,6 +234,19 @@ run_migration() {
     cd "$PROJECT_DIR/config" || exit 1
     python manage.py migrate
     cd "$PROJECT_DIR" || exit 1
+    echo ""
+    read -p "按回车键继续..."
+}
+
+# 创建超级管理员
+create_superuser() {
+    echo -e "${BLUE}👤 创建超级管理员...${NC}"
+    if [ -f "$PROJECT_DIR/start/create_superuser.sh" ]; then
+        bash "$PROJECT_DIR/start/create_superuser.sh"
+    else
+        echo -e "${RED}⚠️  创建脚本不存在${NC}"
+        echo -e "${YELLOW}提示：请手动运行: cd $PROJECT_DIR/core && python create_superuser.py${NC}"
+    fi
     echo ""
     read -p "按回车键继续..."
 }
@@ -184,8 +295,20 @@ while true; do
         1)
             start_services
             ;;
+        1a)
+            start_django_only
+            ;;
+        1b)
+            start_listener_only
+            ;;
         2)
             stop_services
+            ;;
+        2a)
+            stop_django_only
+            ;;
+        2b)
+            stop_listener_only
             ;;
         3)
             restart_services
@@ -209,12 +332,15 @@ while true; do
             run_migration
             ;;
         10)
-            check_listener
+            create_superuser
             ;;
         11)
-            sync_server_time
+            check_listener
             ;;
         12)
+            sync_server_time
+            ;;
+        13)
             realtime_time_compare
             ;;
         0)

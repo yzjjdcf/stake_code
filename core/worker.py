@@ -423,9 +423,9 @@ def _handle_direct_claim_result(claim_status, claim_response_body_str, account, 
                 claim_result = data.get('claimConditionBonusCode', {})
                 if claim_result:
                     bonus_value = claim_result.get('amount')
-                    currency = claim_result.get('currency', '')
+                    bonus_currency = claim_result.get('currency', '').upper() if claim_result.get('currency') else None
                     if bonus_value:
-                        logger.info(f"✅ {account.username} ({log_port} - {location}): 领取成功 - 金额: {bonus_value} {currency} | {time_info}")
+                        logger.info(f"✅ {account.username} ({log_port} - {location}): 领取成功 - 金额: {bonus_value} {bonus_currency or ''} | {time_info}")
             elif claim_status == 'not_found':
                 # 代码未找到，提取错误信息
                 errors = claim_res_json.get('errors', [])
@@ -471,6 +471,18 @@ def _handle_direct_claim_result(claim_status, claim_response_body_str, account, 
     try:
         from serverbot.models import ClaimRecord, CodeRecord
         from django.db.models import F
+        from decimal import Decimal, InvalidOperation
+        
+        # 解析奖金金额（分别保存数值和货币类型，便于计算）
+        bonus_amount = None
+        bonus_value_str = None
+        
+        if bonus_value:
+            try:
+                bonus_amount = Decimal(str(bonus_value))
+                bonus_value_str = f"{bonus_value} {bonus_currency}" if bonus_currency else str(bonus_value)
+            except (ValueError, InvalidOperation, TypeError):
+                bonus_value_str = str(bonus_value)
         
         # 创建ClaimRecord
         ClaimRecord.objects.create(
@@ -478,7 +490,9 @@ def _handle_direct_claim_result(claim_status, claim_response_body_str, account, 
             code_record=code_record,
             code=target_code,
             status=claim_status,
-            bonus_value=str(bonus_value) if bonus_value else None,
+            bonus_value=bonus_value_str,
+            bonus_amount=bonus_amount,
+            bonus_currency=bonus_currency,
             response_time_ms=None,  # 直接领取模式不记录单个请求耗时
             error_message=error_msg,
             query_response_body=None,  # 跳过查询接口，所以没有查询响应
@@ -800,13 +814,49 @@ def handle_response_result(response, account, log_port, location, elapsed_ms, to
     # 记录到ClaimRecord和CodeRecord
     # 无论什么状态都记录，并保存响应体
     try:
+        from decimal import Decimal, InvalidOperation
+        
+        # 解析奖金金额（分别保存数值和货币类型，便于计算）
+        bonus_amount = None
+        bonus_currency = None
+        bonus_value_str = None
+        
+        if bonus_value:
+            try:
+                bonus_amount = Decimal(str(bonus_value))
+                # 尝试从响应体中获取货币类型
+                currency = None
+                if claim_response_body_str:
+                    try:
+                        claim_res_json = json.loads(claim_response_body_str)
+                        data = claim_res_json.get('data', {})
+                        claim_result = data.get('claimConditionBonusCode', {})
+                        currency = claim_result.get('currency', '')
+                    except:
+                        pass
+                # 如果从 claim_response 中没找到，尝试从 query_response 中找
+                if not currency and query_response_body_str:
+                    try:
+                        query_res_json = json.loads(query_response_body_str)
+                        info = query_res_json.get('data', {}).get('conditionBonusCode', {})
+                        if info:
+                            currency = info.get('currency', '')
+                    except:
+                        pass
+                bonus_currency = currency.upper() if currency else None
+                bonus_value_str = f"{bonus_value} {bonus_currency}" if bonus_currency else str(bonus_value)
+            except (ValueError, InvalidOperation, TypeError):
+                bonus_value_str = str(bonus_value)
+        
         # 创建ClaimRecord（所有状态都记录）
         ClaimRecord.objects.create(
             account=account,
             code_record=code_record,
             code=target_code,
             status=claim_status,
-            bonus_value=str(bonus_value) if bonus_value else None,
+            bonus_value=bonus_value_str,
+            bonus_amount=bonus_amount,
+            bonus_currency=bonus_currency,
             response_time_ms=elapsed_ms,
             error_message=error_msg,
             query_response_body=query_response_body_str,  # 查询接口的响应体（总是有）

@@ -9,7 +9,7 @@ PROJECT_DIR="/root/stake_code"
 VENV_DIR="$PROJECT_DIR/venv"
 PYTHON="$VENV_DIR/bin/python"
 DJANGO_LOG="$PROJECT_DIR/db/logs/django/django.log"
-LISTENER_LOG="$PROJECT_DIR/db/logs/listener/listener_pyrogram.log"
+LISTENER_LOG="$PROJECT_DIR/db/logs/listener/listener_tdlib.log"
 PID_DIR="$PROJECT_DIR/pids"
 DJANGO_PID="$PID_DIR/django.pid"
 LISTENER_PID="$PID_DIR/listener.pid"
@@ -55,7 +55,8 @@ start_django() {
     fi
     
     cd "$PROJECT_DIR/config" || exit 1
-    nohup "$PYTHON" manage.py runserver 0.0.0.0:8000 > "$DJANGO_LOG" 2>&1 &
+    # 使用 setsid 创建新会话，完全分离进程，避免输出显示在终端
+    setsid "$PYTHON" manage.py runserver 0.0.0.0:8000 >> "$DJANGO_LOG" 2>&1 < /dev/null &
     DJANGO_PID_VALUE=$!
     cd "$PROJECT_DIR" || exit 1
     
@@ -98,9 +99,9 @@ start_listener() {
     
     echo "🚀 启动 Telegram Listener 服务..."
     
-    # 检查 listener.py 是否存在
-    if [ ! -f "$PROJECT_DIR/core/listener.py" ]; then
-        echo "   ❌ 错误: listener.py 不存在: $PROJECT_DIR/core/listener.py"
+    # 检查 listener_tdlib.py 是否存在
+    if [ ! -f "$PROJECT_DIR/core/listener_tdlib.py" ]; then
+        echo "   ❌ 错误: listener_tdlib.py 不存在: $PROJECT_DIR/core/listener_tdlib.py"
         return 1
     fi
     
@@ -111,7 +112,11 @@ start_listener() {
     fi
     
     cd "$PROJECT_DIR/core" || exit 1
-    nohup "$PYTHON" -u listener.py > "$LISTENER_LOG" 2>&1 &
+    # 使用 setsid 创建新会话，完全分离进程，避免输出显示在终端
+    # 使用 unbuffered 模式，并完全重定向所有输出（包括 TDLib 的 C++ 日志）
+    # 将 stderr 和 stdout 都重定向到日志文件，并丢弃所有输出到终端
+    # 注意：使用 &> 同时重定向 stdout 和 stderr，避免影响 SSH 连接
+    setsid stdbuf -oL -eL "$PYTHON" -u listener_tdlib.py &>> "$LISTENER_LOG" < /dev/null &
     LISTENER_PID_VALUE=$!
     cd "$PROJECT_DIR" || exit 1
     
@@ -138,7 +143,7 @@ start_listener() {
         echo "      1. 检查配置文件: ls -la $PROJECT_DIR/config/config.py"
         echo "      2. 检查 Telegram 配置是否正确"
         echo "      3. 检查虚拟环境: $PYTHON --version"
-        echo "      4. 手动测试: cd $PROJECT_DIR/core && $PYTHON listener.py"
+        echo "      4. 手动测试: cd $PROJECT_DIR/core && $PYTHON listener_tdlib.py"
         rm -f "$LISTENER_PID"
         return 1
     fi
@@ -236,11 +241,23 @@ case "${1:-start}" in
         echo ""
         show_status
         ;;
+    start_django)
+        start_django
+        ;;
+    start_listener)
+        start_listener
+        ;;
     stop)
         echo "🛑 停止所有服务..."
         echo ""
         stop_listener
         stop_django
+        ;;
+    stop_django)
+        stop_django
+        ;;
+    stop_listener)
+        stop_listener
         ;;
     restart)
         echo "🔄 重启所有服务..."
@@ -260,13 +277,17 @@ case "${1:-start}" in
         show_status
         ;;
     *)
-        echo "使用方法: $0 {start|stop|restart|status}"
+        echo "使用方法: $0 {start|stop|restart|status|start_django|start_listener|stop_django|stop_listener}"
         echo ""
         echo "命令说明："
-        echo "  start   - 启动所有服务"
-        echo "  stop    - 停止所有服务"
-        echo "  restart - 重启所有服务"
-        echo "  status  - 查看服务状态"
+        echo "  start          - 启动所有服务"
+        echo "  start_django   - 仅启动 Django"
+        echo "  start_listener - 仅启动 Listener"
+        echo "  stop           - 停止所有服务"
+        echo "  stop_django    - 仅停止 Django"
+        echo "  stop_listener  - 仅停止 Listener"
+        echo "  restart        - 重启所有服务"
+        echo "  status         - 查看服务状态"
         exit 1
         ;;
 esac
