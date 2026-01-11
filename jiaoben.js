@@ -1,11 +1,27 @@
 // ==UserScript==
-// @name         Stake 代码自动领取
+// @name         Stake code claim tool
 // @namespace    http://tampermonkey.net/
 // @version      1.0.0
-// @description  通过 WebSocket 接收代码并自动在 stake.com 领取
+// @description  
 // @author       You
-// @match        https://stake.com/zh/settings/offers*
-// @match        https://stake.com/*/settings/offers*
+// @match        https://stake.com/*settings/offers*
+// @match        https://stake.ac/*settings/offers*
+// @match        https://stake.games/*settings/offers*
+// @match        https://stake.bet/*settings/offers*
+// @match        https://stake.pet/*settings/offers*
+// @match        https://stake.mba/*settings/offers*
+// @match        https://stake.jp/*settings/offers*
+// @match        https://stake.bz/*settings/offers*
+// @match        https://stake.ceo/*settings/offers*
+// @match        https://stake.krd/*settings/offers*
+// @match        https://staketr.com/*settings/offers*
+// @match        https://stake1001.com/*settings/offers*
+// @match        https://stake1002.com/*settings/offers*
+// @match        https://stake1003.com/*settings/offers*
+// @match        https://stake1021.com/*settings/offers*
+// @match        https://stake1022.com/*settings/offers*
+// @match        https://stake.us/settings/offers*
+// @match        https://stake.br/settings/offers*
 // @grant        none
 // @connect      *
 // ==/UserScript==
@@ -22,7 +38,7 @@
     // ==================== 用户标识 ====================
     // 用户唯一标识符（用于区分不同使用者，一个用户可以有多个 Stake 账号）
     // 注意：为每个用户生成脚本时，需要修改此值
-    const USER_ID = 'DEFAULT_USER';  // 请修改为实际的用户标识符
+    const USER_ID = 'KK';  // 请修改为实际的用户标识符
 
     // ==================== 状态管理 ====================
     let ws = null;
@@ -232,6 +248,7 @@
             }
             
             #stake-ws-test-vault-btn {
+                display: none; /* 隐藏测试按钮 */
                 padding: 6px 12px;
                 margin-bottom: 8px;
                 background: #007bff;
