@@ -49,33 +49,37 @@ class ClaimRecordAdmin(admin.ModelAdmin):
     # 使用自定义模板显示统计信息
     change_list_template = 'admin/claimrecord_change_list.html'
     
+    class Media:
+        css = {
+            'all': ('admin/css/custom_claimrecord.css',)  # 自定义 CSS（如果存在）
+        }
+    
     list_display = (
-        'code',
-        'username',
+        'get_code_display',  # 优化代码显示
+        'get_user_id_display',  # 优化用户标识显示
+        'get_username_display',  # 优化用户名显示
         'get_status_display_colored',
-        'bonus_value',
-        'bonus_amount',
-        'bonus_currency',
-        'response_time_ms',
-        'error_message',
-        'get_response_body_preview',
+        'get_bonus_display',
+        'get_error_display',  # 优化错误信息显示
+        'get_response_time_display',  # 优化响应时间显示
         'created_at'
     )
     
     list_filter = [
         'status',
+        'user_id',  # 按用户标识筛选
         UsernameFilter,
         BonusValueFilter,
         ('created_at', DateFieldListFilter),
     ]
     
-    search_fields = ['code', 'username']
+    search_fields = ['code', 'user_id', 'username']
     
     readonly_fields = ('created_at', 'get_response_json_formatted')
     
     fieldsets = (
         ('基本信息', {
-            'fields': ('code', 'username', 'status', 'created_at')
+            'fields': ('code', 'user_id', 'username', 'status', 'created_at')
         }),
         ('奖金信息', {
             'fields': ('bonus_value', 'bonus_amount', 'bonus_currency'),
@@ -141,6 +145,96 @@ class ClaimRecordAdmin(admin.ModelAdmin):
             f'<span style="color: {color}; font-weight: bold;">{status_display}</span>'
         )
     get_status_display_colored.short_description = '状态'
+    
+    def get_code_display(self, obj):
+        """优化代码显示"""
+        code = obj.code or '-'
+        return mark_safe(f'<span style="font-family: monospace; font-weight: 600; color: #007bff;">{code}</span>')
+    get_code_display.short_description = '红包代码'
+    
+    def get_user_id_display(self, obj):
+        """优化用户标识显示"""
+        user_id = obj.user_id
+        if user_id:
+            return mark_safe(f'<span style="color: #6c757d; font-weight: 500;">{user_id}</span>')
+        else:
+            return mark_safe('<span style="color: #999;">-</span>')
+    get_user_id_display.short_description = '用户标识'
+    
+    def get_username_display(self, obj):
+        """优化用户名显示"""
+        username = obj.username
+        if username:
+            return mark_safe(f'<span style="color: #495057; font-weight: 500;">{username}</span>')
+        else:
+            return mark_safe('<span style="color: #999;">-</span>')
+    get_username_display.short_description = '用户名'
+    
+    def get_error_display(self, obj):
+        """优化错误信息显示（截断长文本）"""
+        if obj.error_message:
+            error = obj.error_message
+            # 如果错误信息太长，截断并添加省略号
+            if len(error) > 50:
+                error = error[:50] + '...'
+            # 转义 HTML 特殊字符
+            import html
+            error = html.escape(error)
+            return mark_safe(f'<span style="color: #dc3545; font-size: 12px;" title="{obj.error_message}">{error}</span>')
+        else:
+            return mark_safe('<span style="color: #999;">-</span>')
+    get_error_display.short_description = '错误信息'
+    
+    def get_response_time_display(self, obj):
+        """优化响应时间显示（带颜色标识）"""
+        if obj.response_time_ms is not None:
+            time_ms = obj.response_time_ms
+            # 根据响应时间设置颜色：绿色(<300ms), 黄色(300-500ms), 红色(>500ms)
+            if time_ms < 300:
+                color = '#28a745'
+            elif time_ms < 500:
+                color = '#ffc107'
+            else:
+                color = '#dc3545'
+            return mark_safe(f'<span style="color: {color}; font-weight: 600;">{time_ms}ms</span>')
+        else:
+            return mark_safe('<span style="color: #999;">-</span>')
+    get_response_time_display.short_description = '响应时间'
+    
+    def get_bonus_display(self, obj):
+        """合并显示奖金金额和货币类型，保留两位小数"""
+        if obj.bonus_amount is not None:
+            # 使用 bonus_amount（Decimal 类型）保留两位小数
+            amount = float(obj.bonus_amount)
+            formatted_amount = f"{amount:.2f}"
+            currency = obj.bonus_currency or ""
+            if currency:
+                return mark_safe(f'<span style="color: #28a745; font-weight: 600;">{formatted_amount} {currency}</span>')
+            else:
+                return mark_safe(f'<span style="color: #28a745; font-weight: 600;">{formatted_amount}</span>')
+        elif obj.bonus_value:
+            # 如果没有 bonus_amount，尝试从 bonus_value 中提取并格式化
+            # bonus_value 格式可能是 "6.005999993994 USDT" 或 "6.00599999"
+            import re
+            # 尝试提取数字和货币
+            match = re.match(r'([\d.]+)\s*([A-Z]+)?', str(obj.bonus_value))
+            if match:
+                amount_str = match.group(1)
+                currency_str = match.group(2) or obj.bonus_currency or ""
+                try:
+                    amount = float(amount_str)
+                    formatted_amount = f"{amount:.2f}"
+                    if currency_str:
+                        return mark_safe(f'<span style="color: #28a745; font-weight: 600;">{formatted_amount} {currency_str}</span>')
+                    else:
+                        return mark_safe(f'<span style="color: #28a745; font-weight: 600;">{formatted_amount}</span>')
+                except (ValueError, TypeError):
+                    return obj.bonus_value
+            else:
+                return obj.bonus_value
+        else:
+            return mark_safe('<span style="color: #999;">-</span>')
+    get_bonus_display.short_description = '奖金金额'
     
     def get_response_body_preview(self, obj):
         """在列表页显示响应体预览"""

@@ -18,6 +18,11 @@
     const WEBSOCKET_URL = 'wss://146.103.42.142:8765';  // 修改为你的服务器地址（使用 wss://）
     const RECONNECT_DELAY = 3000;  // 重连延迟（毫秒）
     const MAX_RECONNECT_ATTEMPTS = 10;  // 最大重连次数
+    
+    // ==================== 用户标识 ====================
+    // 用户唯一标识符（用于区分不同使用者，一个用户可以有多个 Stake 账号）
+    // 注意：为每个用户生成脚本时，需要修改此值
+    const USER_ID = 'DEFAULT_USER';  // 请修改为实际的用户标识符
 
     // ==================== 状态管理 ====================
     let ws = null;
@@ -27,6 +32,7 @@
     let statusElement = null;
     let certWindow = null;  // 保存打开的证书窗口引用，用于自动关闭
     let certWindowOpened = false;  // 标记是否已经打开过证书页面，避免重复打开
+    let serverTimeOffset = 0;  // 服务器时间偏移量（服务器时间 - 客户端时间，毫秒）
 
     // ==================== UI 状态显示（终端风格）====================
     let logContainer = null;
@@ -59,7 +65,9 @@
             #stake-ws-panel.collapsed .info-group,
             #stake-ws-panel.collapsed #stake-ws-log-container,
             #stake-ws-panel.collapsed #stake-ws-resize-handle,
-            #stake-ws-panel.collapsed #stake-ws-user-ping-container { display: none; }
+            #stake-ws-panel.collapsed #stake-ws-username,
+            #stake-ws-panel.collapsed #stake-ws-ping-vault-container,
+            #stake-ws-panel.collapsed #stake-ws-test-vault-btn { display: none; }
             #stake-ws-panel.collapsed #stake-ws-header {
                 background: transparent; border: none; margin: 0; padding: 0;
                 width: 100%; height: 100%; justify-content: center;
@@ -130,14 +138,6 @@
             .info-group { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 10px; color: #8a8d92; }
             .info-value { font-weight: 600; color: #ffffff; margin-left: 8px; }
 
-            #stake-ws-user-ping-container {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                margin-bottom: 8px;
-                gap: 8px;
-            }
-            
             #stake-ws-username {
                 font-size: 12px;
                 color: #b0b0b5;
@@ -146,7 +146,15 @@
                 border: 1px solid #23262d;
                 border-radius: 4px;
                 font-weight: 600;
-                flex: 1;
+                margin-bottom: 8px;
+            }
+            
+            #stake-ws-ping-vault-container {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 8px;
+                gap: 8px;
             }
             #stake-ws-username .username-label {
                 color: #8a8d92;
@@ -174,6 +182,73 @@
             #stake-ws-ping .ping-value {
                 color: #6df5f0;
                 font-weight: 700;
+            }
+            
+            #stake-ws-vault-switch {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                padding: 4px 8px;
+                background: #16191f;
+                border: 1px solid #23262d;
+                border-radius: 4px;
+                font-size: 12px;
+                cursor: pointer;
+                user-select: none;
+                white-space: nowrap;
+                flex-shrink: 0;
+            }
+            #stake-ws-vault-switch:hover {
+                background: #1a1d24;
+            }
+            #stake-ws-vault-switch .switch-label {
+                color: #8a8d92;
+            }
+            #stake-ws-vault-switch .switch-checkbox {
+                width: 36px;
+                height: 20px;
+                position: relative;
+                background: #2a2d35;
+                border-radius: 10px;
+                cursor: pointer;
+                transition: background 0.2s;
+            }
+            #stake-ws-vault-switch .switch-checkbox.active {
+                background: #28a745;
+            }
+            #stake-ws-vault-switch .switch-checkbox::after {
+                content: '';
+                position: absolute;
+                width: 16px;
+                height: 16px;
+                border-radius: 50%;
+                background: #fff;
+                top: 2px;
+                left: 2px;
+                transition: left 0.2s;
+            }
+            #stake-ws-vault-switch .switch-checkbox.active::after {
+                left: 18px;
+            }
+            
+            #stake-ws-test-vault-btn {
+                padding: 6px 12px;
+                margin-bottom: 8px;
+                background: #007bff;
+                border: 1px solid #0056b3;
+                border-radius: 4px;
+                font-size: 12px;
+                color: #fff;
+                text-align: center;
+                cursor: pointer;
+                user-select: none;
+                transition: background 0.2s;
+            }
+            #stake-ws-test-vault-btn:hover {
+                background: #0056b3;
+            }
+            #stake-ws-test-vault-btn:active {
+                background: #004085;
             }
 
             #stake-ws-log-container {
@@ -218,16 +293,21 @@
                     <div id="stake-ws-close-btn" title="收起">×</div>
                 </div>
             </div>
-            <div id="stake-ws-user-ping-container">
-                <div id="stake-ws-username">
-                    <span class="username-label">user:</span>
-                    <span class="username-value" id="stake-ws-username-value">-</span>
+            <div id="stake-ws-username">
+                <span class="username-label">user:</span>
+                <span class="username-value" id="stake-ws-username-value">-</span>
+            </div>
+            <div id="stake-ws-ping-vault-container">
+                <div id="stake-ws-vault-switch">
+                    <span class="switch-label">存入保险库</span>
+                    <div class="switch-checkbox" id="stake-ws-vault-checkbox"></div>
                 </div>
                 <div id="stake-ws-ping">
                     <span class="ping-label">ping:</span>
                     <span class="ping-value" id="stake-ws-ping-value">-</span>
                 </div>
             </div>
+            <div id="stake-ws-test-vault-btn">测试存入 1 USDT</div>
             <div id="stake-ws-log-container"></div>
             <div id="stake-ws-resize-handle" title="拖动等比缩放"></div>
         `;
@@ -238,6 +318,12 @@
         
         // 初始化时获取并显示用户名
         updateUsernameDisplay();
+        
+        // 初始化存入保险库开关
+        initVaultSwitch();
+        
+        // 初始化测试存入保险库按钮
+        initTestVaultButton();
 
         // 单击展开
         statusElement.addEventListener('click', (e) => {
@@ -408,15 +494,29 @@
         }, 100);
     }
 
-    function addLog(message, type = 'info') {
+    // 获取服务器时间（基于时间偏移量）
+    function getServerTime() {
+        return new Date(Date.now() + serverTimeOffset);
+    }
+    
+    // 格式化服务器时间
+    function formatServerTime(date) {
+        const hours = String(date.getHours()).padStart(2, '0');
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        const seconds = String(date.getSeconds()).padStart(2, '0');
+        const milliseconds = String(date.getMilliseconds()).padStart(3, '0');
+        return `${hours}:${minutes}:${seconds}.${milliseconds}`;
+    }
+    
+    function addLog(message, type = 'info', useServerTime = true) {
         if (!logContainer) return;
         
         const logItem = document.createElement('div');
         logItem.className = `log-item log-${type}`;
         
-        // 格式化时间戳
-        const now = new Date();
-        const timeStr = now.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        // 使用服务器时间格式化时间戳
+        const timeDate = useServerTime ? getServerTime() : new Date();
+        const timeStr = formatServerTime(timeDate);
         
         // 高亮代码
         let formattedMessage = message;
@@ -499,6 +599,184 @@
         }
     }
 
+    // 格式化金额（保留两位小数）
+    function formatAmount(amount) {
+        if (amount === null || amount === undefined || amount === 'N/A') {
+            return 'N/A';
+        }
+        try {
+            const num = parseFloat(amount);
+            if (isNaN(num)) {
+                return amount;  // 如果不是数字，返回原值
+            }
+            return num.toFixed(2);  // 保留两位小数
+        } catch (e) {
+            return amount;  // 如果转换失败，返回原值
+        }
+    }
+
+    // 初始化存入保险库开关
+    function initVaultSwitch() {
+        const checkbox = document.getElementById('stake-ws-vault-checkbox');
+        const switchContainer = document.getElementById('stake-ws-vault-switch');
+        if (!checkbox || !switchContainer) return;
+        
+        // 从 localStorage 读取开关状态
+        const savedState = localStorage.getItem('stake_vault_auto_deposit');
+        const isEnabled = savedState === 'true';
+        
+        if (isEnabled) {
+            checkbox.classList.add('active');
+        }
+        
+        // 点击切换开关
+        switchContainer.addEventListener('click', function() {
+            const isActive = checkbox.classList.contains('active');
+            if (isActive) {
+                checkbox.classList.remove('active');
+                localStorage.setItem('stake_vault_auto_deposit', 'false');
+            } else {
+                checkbox.classList.add('active');
+                localStorage.setItem('stake_vault_auto_deposit', 'true');
+            }
+        });
+    }
+
+    // 初始化测试存入保险库按钮
+    function initTestVaultButton() {
+        const testBtn = document.getElementById('stake-ws-test-vault-btn');
+        if (!testBtn) return;
+        
+        testBtn.addEventListener('click', async function() {
+            // 禁用按钮，防止重复点击
+            testBtn.style.opacity = '0.6';
+            testBtn.style.cursor = 'not-allowed';
+            testBtn.textContent = '测试中...';
+            
+            try {
+                console.log('[Stake WS] 🧪 测试存入保险库: 1 USDT');
+                addLog('🧪 测试存入保险库: 1 USDT', 'info');
+                
+                const result = await depositToVault(1, 'usdt');
+                
+                if (result.success) {
+                    const depositedAmount = result.data?.amount || '1';
+                    addLog(`✅ 测试成功: 存入 ${depositedAmount} USDT`, 'success');
+                    console.log('[Stake WS] ✅ 测试存入保险库成功:', result.data);
+                } else {
+                    addLog(`❌ 测试失败: ${result.error}`, 'error');
+                    console.error('[Stake WS] ❌ 测试存入保险库失败:', result.error);
+                }
+            } catch (e) {
+                addLog(`❌ 测试异常: ${e.message}`, 'error');
+                console.error('[Stake WS] ❌ 测试存入保险库异常:', e);
+            } finally {
+                // 恢复按钮状态
+                testBtn.style.opacity = '1';
+                testBtn.style.cursor = 'pointer';
+                testBtn.textContent = '测试存入 1 USDT';
+            }
+        });
+    }
+
+    // 检查是否启用自动存入保险库
+    function isVaultAutoDepositEnabled() {
+        return localStorage.getItem('stake_vault_auto_deposit') === 'true';
+    }
+
+    // 存入保险库
+    async function depositToVault(amount, currency) {
+        try {
+            // 获取 token（使用与领取接口相同的方式）
+            const token = getStakeToken();
+            if (!token) {
+                console.error('[Stake WS] 无法获取 token，无法存入保险库');
+                return { success: false, error: '无法获取 token' };
+            }
+
+            // 处理金额：向下取整到2位小数
+            const originalAmount = parseFloat(amount);
+            if (isNaN(originalAmount) || originalAmount <= 0) {
+                console.error('[Stake WS] 无效的金额，无法存入保险库');
+                return { success: false, error: '无效的金额' };
+            }
+
+            // 向下取整到2位小数
+            const safeAmount = Math.floor(originalAmount * 100) / 100;
+            
+            // 如果处理后的金额小于最小值（0.01），则不存入
+            if (safeAmount < 0.01) {
+                console.warn(`[Stake WS] 金额太小（处理后: ${safeAmount}），跳过存入保险库`);
+                return { success: false, error: '金额太小，无法存入' };
+            }
+
+            console.log(`[Stake WS] 金额处理: 原始=${originalAmount}, 向下取整=${safeAmount.toFixed(2)}`);
+
+            // 构建 GraphQL mutation
+            const mutation = `mutation CreateVaultDeposit($currency: CurrencyEnum!, $amount: Float!) {
+                createVaultDeposit(currency: $currency, amount: $amount) {
+                    id
+                    amount
+                    currency
+                    user {
+                        id
+                        balances {
+                            available {
+                                amount
+                                currency
+                            }
+                            vault {
+                                amount
+                                currency
+                            }
+                        }
+                    }
+                    __typename
+                }
+            }`;
+
+            const variables = {
+                currency: currency.toLowerCase(),
+                amount: safeAmount  // 使用处理后的安全金额
+            };
+
+            // 发送请求
+            const response = await fetch('https://stake.com/_api/graphql', {
+                method: 'POST',
+                headers: {
+                    'accept': '*/*',
+                    'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,zh-TW;q=0.7',
+                    'content-type': 'application/json',
+                    'origin': 'https://stake.com',
+                    'referer': 'https://stake.com/zh/settings/offers',
+                    'x-access-token': token,
+                    'x-language': 'zh',
+                    'x-operation-name': 'CreateVaultDeposit',
+                    'x-operation-type': 'query'
+                },
+                body: JSON.stringify({
+                    query: mutation,
+                    variables: variables
+                })
+            });
+
+            const responseData = await response.json();
+
+            if (responseData.data && responseData.data.createVaultDeposit) {
+                console.log('[Stake WS] ✅ 存入保险库成功:', responseData.data.createVaultDeposit);
+                return { success: true, data: responseData.data.createVaultDeposit };
+            } else {
+                const error = responseData.errors?.[0]?.message || '未知错误';
+                console.error('[Stake WS] ❌ 存入保险库失败:', error);
+                return { success: false, error: error };
+            }
+        } catch (e) {
+            console.error('[Stake WS] ❌ 存入保险库异常:', e);
+            return { success: false, error: e.message };
+        }
+    }
+
+
     // ==================== WebSocket 连接 ====================
     function connect() {
         if (isConnecting || (ws && ws.readyState === WebSocket.OPEN)) {
@@ -507,7 +785,7 @@
 
         isConnecting = true;
         updateConnectionStatus('connecting');
-        addLog('正在连接到服务器...', 'info');
+        console.log('[Stake WS] 正在连接到服务器...');
 
         try {
             ws = new WebSocket(WEBSOCKET_URL);
@@ -517,17 +795,18 @@
                 isConnecting = false;
                 reconnectAttempts = 0;
                 updateConnectionStatus('connected');
+                addLog('✅ 连接成功', 'success');
                 
                 // 连接成功后，尝试关闭证书信任页面
                 if (certWindow && !certWindow.closed) {
                     try {
                         certWindow.close();
-                        addLog('✅ 证书已信任，已自动关闭证书页面', 'success');
+                        console.log('[Stake WS] ✅ 证书已信任，已自动关闭证书页面');
                         certWindow = null;
                         certWindowOpened = false;  // 重置标志，允许下次重新打开
                     } catch (e) {
                         // 如果无法关闭（可能是跨域限制），提示用户手动关闭
-                        addLog('✅ 证书已信任，请手动关闭证书页面', 'success');
+                        console.log('[Stake WS] ✅ 证书已信任，请手动关闭证书页面');
                         certWindow = null;
                         certWindowOpened = false;  // 重置标志
                     }
@@ -582,8 +861,8 @@
                                 const port = urlMatch[2] || '8765';
                                 const certUrl = `https://${host}:${port}/`;
                                 
-                                console.error('💡 检测到 SSL 证书问题，正在打开证书信任页面...');
-                                addLog('⚠️ SSL 证书未信任，正在打开证书页面...', 'warning');
+                                console.error('[Stake WS] 💡 检测到 SSL 证书问题，正在打开证书信任页面...');
+                                console.log('[Stake WS] ⚠️ SSL 证书未信任，正在打开证书页面...');
                                 
                                 // 标记已打开证书页面
                                 certWindowOpened = true;
@@ -594,36 +873,36 @@
                                     // 保存窗口引用，以便连接成功后自动关闭
                                     certWindow = window.open(certUrl, '_blank');
                                     
-                                    // 显示详细提示
-                                    addLog('📋 请在打开的页面中：', 'info');
-                                    addLog('   1. 点击"高级"或"Advanced"', 'info');
-                                    addLog('   2. 点击"继续访问"或"Proceed"', 'info');
-                                    addLog('   3. 信任证书后，页面会自动关闭', 'info');
+                                    // 显示详细提示（只在 console 中显示）
+                                    console.log('[Stake WS] 📋 请在打开的页面中：');
+                                    console.log('[Stake WS]    1. 点击"高级"或"Advanced"');
+                                    console.log('[Stake WS]    2. 点击"继续访问"或"Proceed"');
+                                    console.log('[Stake WS]    3. 信任证书后，页面会自动关闭');
                                     
                                     // 5秒后自动重连
                                     setTimeout(() => {
-                                        addLog('🔄 5秒后自动重连...', 'info');
+                                        console.log('[Stake WS] 🔄 5秒后自动重连...');
                                         setTimeout(() => {
                                             connect();
                                         }, 5000);
                                     }, 2000);
                                 }, 1000);
                             } else {
-                                console.error('💡 建议：在浏览器中访问服务器地址并接受证书');
-                                addLog('连接错误: SSL 证书或网络问题', 'error');
+                                console.error('[Stake WS] 💡 建议：在浏览器中访问服务器地址并接受证书');
+                                console.error('[Stake WS] 连接错误: SSL 证书或网络问题');
                             }
                         } else if (isCertWindowOpen) {
                             // 证书页面已打开，只提示用户操作，不重复打开
-                            addLog('⚠️ 证书页面已打开，请完成证书信任操作', 'warning');
+                            console.log('[Stake WS] ⚠️ 证书页面已打开，请完成证书信任操作');
                         } else {
                             // 证书页面已关闭但连接仍失败，可能是其他问题
-                            addLog('⚠️ 证书已信任但连接仍失败，可能是服务器问题', 'warning');
+                            console.log('[Stake WS] ⚠️ 证书已信任但连接仍失败，可能是服务器问题');
                         }
                     } else {
-                        addLog('连接错误: SSL 证书或网络问题', 'error');
+                        console.error('[Stake WS] 连接错误: SSL 证书或网络问题');
                     }
                 } else {
-                    addLog('WebSocket 连接错误', 'error');
+                    console.error('[Stake WS] WebSocket 连接错误');
                 }
                 
                 updateConnectionStatus('error');
@@ -666,17 +945,19 @@
                 
                 isConnecting = false;
                 updateConnectionStatus('error');
-                addLog(`连接关闭 (代码: ${event.code})`, 'error');
+                console.log(`[Stake WS] 连接关闭 (代码: ${event.code})`);
                 
                 // 自动重连
                 if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                     reconnectAttempts++;
                     updateConnectionStatus('connecting');
-                    addLog(`尝试重连 ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}...`, 'warning');
+                    console.log(`[Stake WS] 尝试重连 ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}...`);
+                    addLog('❌ 连接失败，正在尝试重连中...', 'info');
                     setTimeout(connect, RECONNECT_DELAY);
                 } else {
                     updateConnectionStatus('error');
-                    addLog('达到最大重连次数，请刷新页面', 'error');
+                    console.error('[Stake WS] 达到最大重连次数，请刷新页面');
+                    addLog('❌ 连接失败，正在尝试重连中...', 'info');
                 }
             };
 
@@ -685,7 +966,7 @@
             console.error('[Stake WS] 异常详情:', e.message, e.stack);
             isConnecting = false;
             updateConnectionStatus('error');
-            addLog(`连接异常: ${e.message}`, 'error');
+            console.error(`[Stake WS] 连接异常: ${e.message}`);
         }
     }
 
@@ -695,7 +976,22 @@
 
         if (data.type === 'connected') {
             updateConnectionStatus('connected');
-            addLog('服务器确认连接', 'success');
+            
+            // 同步服务器时间
+            if (data.server_timestamp_ms) {
+                const clientTime = Date.now();
+                serverTimeOffset = data.server_timestamp_ms - clientTime;
+                console.log('[Stake WS] 时间同步:', {
+                    server_time: new Date(data.server_timestamp_ms).toISOString(),
+                    client_time: new Date(clientTime).toISOString(),
+                    offset_ms: serverTimeOffset,
+                    offset_sec: (serverTimeOffset / 1000).toFixed(2)
+                });
+                console.log(`[Stake WS] 服务器确认连接 (时间已同步，偏移: ${(serverTimeOffset / 1000).toFixed(2)}秒)`);
+            } else {
+                console.log('[Stake WS] 服务器确认连接');
+            }
+            
             // 连接成功后更新用户名显示
             updateUsernameDisplay();
             // 连接成功后立即发送一次 ping 测试延迟
@@ -704,6 +1000,13 @@
                 ws.send(JSON.stringify({ type: 'ping' }));
             }
         } else if (data.type === 'code_detected') {
+            // 如果消息包含服务器时间戳，更新时间偏移（用于更精确的时间同步）
+            if (data.server_timestamp_ms) {
+                const clientTime = Date.now();
+                const newOffset = data.server_timestamp_ms - clientTime;
+                // 平滑更新偏移量（避免网络延迟导致的抖动）
+                serverTimeOffset = serverTimeOffset === 0 ? newOffset : (serverTimeOffset * 0.7 + newOffset * 0.3);
+            }
             addLog(`收到代码: ${data.code}`, 'info');
             handleCodeReceived(data);
         } else if (data.type === 'pong') {
@@ -730,10 +1033,11 @@
             if (result.success) {
                 const amount = result.data?.amount || 'N/A';
                 const currency = result.data?.currency || '';
-                addLog(`✅ 领取成功: ${code} (${amount} ${currency})`, 'success');
+                const formattedAmount = formatAmount(amount);
+                addLog(`✅ 领取成功: ${formattedAmount} ${currency}`, 'success');
                 console.log('[Stake WS] 领取成功:', result.data);
                 
-                // 发送成功结果回服务器
+                // 发送成功结果回服务器（使用服务器时间）
                 sendClaimResultToServer({
                     code: code,
                     success: true,
@@ -743,8 +1047,25 @@
                     username: username,
                     responseTime: responseTime,
                     responseBody: JSON.stringify(result.fullResponse || result.data),
-                    errorMessage: null
+                    errorMessage: null,
+                    server_timestamp_ms: getServerTime().getTime()  // 使用服务器时间
                 });
+                
+                // 如果启用了自动存入保险库，则自动存入
+                if (isVaultAutoDepositEnabled() && amount && amount !== 'N/A') {
+                    const depositAmount = parseFloat(amount);
+                    if (!isNaN(depositAmount) && depositAmount > 0) {
+                        console.log(`[Stake WS] 💰 自动存入保险库: 原始金额 ${formattedAmount} ${currency}`);
+                        depositToVault(depositAmount, currency).then(depositResult => {
+                            if (depositResult.success) {
+                                const depositedAmount = depositResult.data?.amount || '未知';
+                                console.log(`[Stake WS] ✅ 存入保险库成功: ${depositedAmount} ${currency}`);
+                            } else {
+                                console.error('[Stake WS] ❌ 存入保险库失败:', depositResult.error);
+                            }
+                        });
+                    }
+                }
             } else {
                 addLog(`❌ 领取失败: ${code} - ${result.error}`, 'error');
                 console.error('[Stake WS] 领取失败:', result.error);
@@ -763,7 +1084,7 @@
                     status = 'weekly_wager_requirement';
                 }
                 
-                // 发送失败结果回服务器
+                // 发送失败结果回服务器（使用服务器时间）
                 sendClaimResultToServer({
                     code: code,
                     success: false,
@@ -773,14 +1094,15 @@
                     username: username,
                     responseTime: responseTime,
                     responseBody: JSON.stringify(result.fullResponse || {}),
-                    errorMessage: result.error
+                    errorMessage: result.error,
+                    server_timestamp_ms: getServerTime().getTime()  // 使用服务器时间
                 });
             }
         } catch (e) {
             addLog(`❌ 领取异常: ${code} - ${e.message}`, 'error');
             console.error('[Stake WS] 领取异常:', e);
             
-            // 发送异常结果回服务器
+            // 发送异常结果回服务器（使用服务器时间）
             sendClaimResultToServer({
                 code: code,
                 success: false,
@@ -790,7 +1112,8 @@
                 username: getUsernameFromPage(),
                 responseTime: null,
                 responseBody: null,
-                errorMessage: e.message
+                errorMessage: e.message,
+                server_timestamp_ms: getServerTime().getTime()  // 使用服务器时间
             });
         }
     }
@@ -883,16 +1206,18 @@
         try {
             const message = {
                 type: 'claim_result',
+                user_id: USER_ID,  // 用户标识符（用于区分不同使用者）
                 code: resultData.code,
                 success: resultData.success,
                 status: resultData.status,
                 amount: resultData.amount,
                 currency: resultData.currency,
-                username: resultData.username,
+                username: resultData.username,  // Stake 账号用户名
                 responseTime: resultData.responseTime,
                 responseBody: resultData.responseBody,
                 errorMessage: resultData.errorMessage,
-                timestamp: new Date().toISOString()
+                timestamp: getServerTime().toISOString(),  // 使用服务器时间
+                server_timestamp_ms: resultData.server_timestamp_ms || getServerTime().getTime()  // 确保包含服务器时间戳
             };
             
             ws.send(JSON.stringify(message));
@@ -990,11 +1315,12 @@
                 } else {
                     // 领取成功
                     const claimResult = responseData.data?.claimConditionBonusCode;
+                    const formattedAmount = formatAmount(claimResult?.amount);
                     return {
                         success: true,
                         data: claimResult,
                         fullResponse: responseData,  // 添加完整响应
-                        message: `领取成功！金额: ${claimResult?.amount || 'N/A'} ${claimResult?.currency || ''}`
+                        message: `领取成功！金额: ${formattedAmount} ${claimResult?.currency || ''}`
                     };
                 }
             } else {
@@ -1104,6 +1430,19 @@
                 container.id = 'stake-ws-turnstile-container';
                 container.style.cssText = 'position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden;';
                 document.body.appendChild(container);
+            } else {
+                // 如果容器已存在但 widget ID 无效，清空容器以便重新渲染
+                if (turnstileWidgetId && window.turnstile) {
+                    try {
+                        window.turnstile.remove(turnstileWidgetId);
+                    } catch (e) {
+                        // 忽略移除错误，可能 widget 已经不存在
+                        console.warn('[Stake WS] 移除旧 widget 时出错（可忽略）:', e.message);
+                    }
+                }
+                // 清空容器内容
+                container.innerHTML = '';
+                turnstileWidgetId = null;
             }
 
             // 渲染 Turnstile widget
@@ -1149,9 +1488,35 @@
             return await tokenRefreshPromise;
         }
 
-        if (!window.turnstile || !turnstileWidgetId) {
-            console.warn('[Stake WS] Turnstile widget 未初始化，无法刷新');
-            return null;
+        if (!window.turnstile) {
+            console.warn('[Stake WS] Turnstile API 未加载，尝试重新初始化...');
+            await initTurnstileTokenGrabber();
+            if (!window.turnstile) {
+                console.error('[Stake WS] ❌ 无法加载 Turnstile API');
+                return null;
+            }
+        }
+
+        // 检查容器是否存在
+        const container = document.getElementById('stake-ws-turnstile-container');
+        if (!container) {
+            console.warn('[Stake WS] Turnstile 容器不存在，重新初始化...');
+            turnstileWidgetId = null;
+            await initTurnstileTokenGrabber();
+            if (!turnstileWidgetId) {
+                console.error('[Stake WS] ❌ 无法初始化 Turnstile widget');
+                return null;
+            }
+        }
+
+        // 如果 widget ID 无效，重新初始化
+        if (!turnstileWidgetId) {
+            console.warn('[Stake WS] Turnstile widget ID 无效，重新初始化...');
+            await initTurnstileTokenGrabber();
+            if (!turnstileWidgetId) {
+                console.error('[Stake WS] ❌ 无法获取 Turnstile widget ID');
+                return null;
+            }
         }
 
         isRefreshingToken = true;
@@ -1159,10 +1524,46 @@
         
         // 创建刷新 Promise
         tokenRefreshPromise = new Promise((resolve) => {
-            const originalCallback = window.turnstile.render.toString();
-            
-            // 重置 widget
-            window.turnstile.reset(turnstileWidgetId);
+            try {
+                // 尝试重置 widget
+                window.turnstile.reset(turnstileWidgetId);
+            } catch (e) {
+                // 如果 reset 失败（例如 widget 不存在），尝试重新初始化
+                console.warn('[Stake WS] ⚠️ Reset 失败，尝试重新初始化 widget:', e.message);
+                turnstileWidgetId = null;
+                turnstileTokenCache = null;
+                
+                // 重新初始化
+                initTurnstileTokenGrabber().then(() => {
+                    // 等待新 widget 生成 token
+                    const checkInterval = setInterval(() => {
+                        if (turnstileTokenCache) {
+                            clearInterval(checkInterval);
+                            isRefreshingToken = false;
+                            tokenRefreshPromise = null;
+                            console.log('[Stake WS] ✅ Token 通过重新初始化获取成功');
+                            resolve(turnstileTokenCache);
+                        }
+                    }, 500);
+                    
+                    // 10 秒超时
+                    setTimeout(() => {
+                        clearInterval(checkInterval);
+                        if (!turnstileTokenCache) {
+                            isRefreshingToken = false;
+                            tokenRefreshPromise = null;
+                            console.error('[Stake WS] ❌ 重新初始化后 Token 获取超时');
+                            resolve(null);
+                        }
+                    }, 10000);
+                }).catch(err => {
+                    console.error('[Stake WS] ❌ 重新初始化失败:', err);
+                    isRefreshingToken = false;
+                    tokenRefreshPromise = null;
+                    resolve(null);
+                });
+                return;
+            }
             
             // 等待新 Token 生成（最多等待 10 秒）
             const checkInterval = setInterval(() => {

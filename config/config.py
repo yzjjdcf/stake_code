@@ -25,8 +25,8 @@ os.makedirs(PROFILES_DIR, exist_ok=True)
 os.makedirs(PROXY_EXT_DIR, exist_ok=True)
 
 # ==================== Telegram 配置 ====================
-TELEGRAM_API_ID = 29656021
-TELEGRAM_API_HASH = 'bb23c410c63a820d7c4209e0606d4aea'
+TELEGRAM_API_ID = 22748414
+TELEGRAM_API_HASH = '1b351defb50cc4e0ac7bd2cddc6c852b'
 
 # 多频道配置（支持多个频道，每个频道有不同的解析规则）
 # 格式：{频道ID或用户名: 解析器名称}

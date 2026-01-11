@@ -3,7 +3,8 @@ from django.db import models
 
 class ClaimRecord(models.Model):
     """记录每个账号的抢码结果"""
-    username = models.CharField(max_length=100, null=True, blank=True, verbose_name="用户名", help_text="用户名字符串，用于 WebSocket 领取记录")
+    user_id = models.CharField(max_length=100, null=True, blank=True, verbose_name="用户标识", help_text="用户唯一标识符，用于区分不同使用者（一个用户可以有多个 Stake 账号）", db_index=True)
+    username = models.CharField(max_length=100, null=True, blank=True, verbose_name="用户名", help_text="Stake 账号用户名字符串，用于 WebSocket 领取记录")
     code = models.CharField(max_length=100, verbose_name="红包代码", db_index=True)
     
     # 状态：领取接口返回的所有状态
@@ -37,6 +38,7 @@ class ClaimRecord(models.Model):
         indexes = [
             models.Index(fields=['code', 'status']),
             models.Index(fields=['created_at']),
+            models.Index(fields=['user_id', 'created_at']),  # 用于按用户查询
         ]
     
     def __str__(self):
