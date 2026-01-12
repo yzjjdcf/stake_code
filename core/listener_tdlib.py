@@ -315,27 +315,6 @@ def process_message_async(update):
         # 获取频道名称（优先使用映射的名称，如果没有则使用原始标题）
         channel_name = channel_name_map.get(chat_id, chat_title)
         
-        # 计算延迟信息（用于日志和转发消息）
-        delay_ms = None
-        message_datetime = None
-        if message_date > 0:
-            message_datetime = datetime.fromtimestamp(message_date)
-            # 计算延迟差值（毫秒）
-            delay_seconds = (update_received_time - message_datetime).total_seconds()
-            delay_ms = int(delay_seconds * 1000)
-            # 记录消息接收时间和发送时间（合并为一条日志，减少 I/O）
-            logger.info(
-                f"📨 收到消息 | "
-                f"频道: {channel_name} | "
-                f"消息ID: {message_id} | "
-                f"发送时间: {message_datetime.strftime('%H:%M:%S.%f')[:-3]} | "
-                f"收到时间: {update_received_time.strftime('%H:%M:%S.%f')[:-3]} | "
-                f"延迟: {delay_ms}ms"
-            )
-        else:
-            # 如果没有发送时间，只记录收到时间
-            logger.info(f"📨 收到消息 | 频道: {channel_name} | 消息ID: {message_id} | 收到时间: {update_received_time.strftime('%H:%M:%S.%f')[:-3]}")
-
         # 文本/caption
         content = message.get('content', {})
         msg_type = content.get('@type')
@@ -346,48 +325,111 @@ def process_message_async(update):
         raw_text = text_entities or caption or ''
 
         has_video = msg_type == 'messageVideo'
-        # 优化：合并日志输出，减少 I/O 次数
-        logger.info(f"✅ 匹配到目标频道: {channel_name} ({chat_id}) | 类型: {'视频+文字' if has_video else '文字'} | 内容: {raw_text[:100] if raw_text else '[媒体]'}")
-
+        
         if not raw_text and not has_video:
             return
 
         parser_name = channel_id_map.get(chat_id, 'default_parser')
         parser_func = CODE_PARSERS.get(parser_name, parse_code_default)
 
-        # 视频解析
+        # 对于 FC 频道，先尝试提取代码，如果无法提取就不记录日志
+        FC_CHANNEL_ID = -1002140237447
+        is_fc_channel = (chat_id == FC_CHANNEL_ID)
+        
+        # 对于 FC 频道，先快速尝试提取代码（文本解析很快）
         code = None
-        if parser_name == 'daily_code_parser' and has_video:
-            video = content.get('video', {}).get('video', {})
-            file_id = video.get('id')
-            if file_id:
-                video_path = download_video_file(file_id)
-                if video_path:
-                    class DummyMessage:
-                        # 适配 parse_code_daily_code_async 的 download_func 使用路径
-                        pass
-                    dummy_msg = DummyMessage()
-                    dummy_msg.file_path = video_path
-                    # parse_code_daily_code_async 是协程，需等待
-                    try:
-                        loop = asyncio.get_event_loop()
-                    except RuntimeError:
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                    code = loop.run_until_complete(
-                        parse_code_daily_code_async(
-                            raw_text,
-                            message=dummy_msg,
-                            has_video=True,
-                            download_func=lambda m: video_path
-                        )
-                    )
-        else:
+        if is_fc_channel:
+            # FC 频道不使用视频解析，直接文本解析
             code = parser_func(raw_text)
+            # 如果无法提取代码，直接返回，不记录任何日志
+            if not code:
+                return
+        
+        # 对于非 FC 频道，先记录日志，再提取代码（保持原有逻辑）
+        if not is_fc_channel:
+            # 计算延迟信息（用于日志和转发消息）
+            delay_ms = None
+            message_datetime = None
+            if message_date > 0:
+                message_datetime = datetime.fromtimestamp(message_date)
+                # 计算延迟差值（毫秒）
+                delay_seconds = (update_received_time - message_datetime).total_seconds()
+                delay_ms = int(delay_seconds * 1000)
+                # 记录消息接收时间和发送时间（合并为一条日志，减少 I/O）
+                logger.info(
+                    f"📨 收到消息 | "
+                    f"频道: {channel_name} | "
+                    f"消息ID: {message_id} | "
+                    f"发送时间: {message_datetime.strftime('%H:%M:%S.%f')[:-3]} | "
+                    f"收到时间: {update_received_time.strftime('%H:%M:%S.%f')[:-3]} | "
+                    f"延迟: {delay_ms}ms"
+                )
+            else:
+                # 如果没有发送时间，只记录收到时间
+                logger.info(f"📨 收到消息 | 频道: {channel_name} | 消息ID: {message_id} | 收到时间: {update_received_time.strftime('%H:%M:%S.%f')[:-3]}")
+            
+            # 优化：合并日志输出，减少 I/O 次数
+            logger.info(f"✅ 匹配到目标频道: {channel_name} ({chat_id}) | 类型: {'视频+文字' if has_video else '文字'} | 内容: {raw_text[:100] if raw_text else '[媒体]'}")
+        
+        # 视频解析（对于非 FC 频道，或 FC 频道但需要视频解析的情况）
+        if not code:
+            if parser_name == 'daily_code_parser' and has_video:
+                video = content.get('video', {}).get('video', {})
+                file_id = video.get('id')
+                if file_id:
+                    video_path = download_video_file(file_id)
+                    if video_path:
+                        class DummyMessage:
+                            # 适配 parse_code_daily_code_async 的 download_func 使用路径
+                            pass
+                        dummy_msg = DummyMessage()
+                        dummy_msg.file_path = video_path
+                        # parse_code_daily_code_async 是协程，需等待
+                        try:
+                            loop = asyncio.get_event_loop()
+                        except RuntimeError:
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                        code = loop.run_until_complete(
+                            parse_code_daily_code_async(
+                                raw_text,
+                                message=dummy_msg,
+                                has_video=True,
+                                download_func=lambda m: video_path
+                            )
+                        )
+            else:
+                code = parser_func(raw_text)
 
         if not code:
             logger.warning(f"⚠️ 无法从消息中提取代码（解析器: {parser_name}）")
             return
+        
+        # 对于 FC 频道，如果能提取到代码，再记录日志
+        if is_fc_channel:
+            # 计算延迟信息（用于日志和转发消息）
+            delay_ms = None
+            message_datetime = None
+            if message_date > 0:
+                message_datetime = datetime.fromtimestamp(message_date)
+                # 计算延迟差值（毫秒）
+                delay_seconds = (update_received_time - message_datetime).total_seconds()
+                delay_ms = int(delay_seconds * 1000)
+                # 记录消息接收时间和发送时间（合并为一条日志，减少 I/O）
+                logger.info(
+                    f"📨 收到消息 | "
+                    f"频道: {channel_name} | "
+                    f"消息ID: {message_id} | "
+                    f"发送时间: {message_datetime.strftime('%H:%M:%S.%f')[:-3]} | "
+                    f"收到时间: {update_received_time.strftime('%H:%M:%S.%f')[:-3]} | "
+                    f"延迟: {delay_ms}ms"
+                )
+            else:
+                # 如果没有发送时间，只记录收到时间
+                logger.info(f"📨 收到消息 | 频道: {channel_name} | 消息ID: {message_id} | 收到时间: {update_received_time.strftime('%H:%M:%S.%f')[:-3]}")
+            
+            # 优化：合并日志输出，减少 I/O 次数
+            logger.info(f"✅ 匹配到目标频道: {channel_name} ({chat_id}) | 类型: {'视频+文字' if has_video else '文字'} | 内容: {raw_text[:100] if raw_text else '[媒体]'}")
 
         logger.info(f"✅ 提取的代码: {code} | 频道: {channel_name}")
 
@@ -493,8 +535,9 @@ async def broadcast_to_clients(message_data):
 async def websocket_handler(websocket, path):
     """WebSocket 连接处理器"""
     client_addr = websocket.remote_address
-    logger.info(f"🔌 新客户端连接: {client_addr}")
+    client_username = None  # 客户端用户名（等待初始化消息）
     connected_clients.add(websocket)
+    logger.info(f"🔌 新客户端连接: {client_addr}")
     
     try:
         # 发送欢迎消息（包含服务器时间戳，用于客户端时间同步）
@@ -513,7 +556,14 @@ async def websocket_handler(websocket, path):
         async for message in websocket:
             try:
                 data = json.loads(message)
-                if data.get('type') == 'ping':
+                if data.get('type') == 'init':
+                    # 接收客户端初始化消息（包含 username）
+                    client_username = data.get('username', '-')
+                    if client_username and client_username != '-':
+                        logger.info(f"🔌 客户端账号信息: {client_addr} | 账号: {client_username}")
+                    else:
+                        logger.info(f"🔌 客户端账号信息: {client_addr} | 账号: 未获取")
+                elif data.get('type') == 'ping':
                     # 响应心跳
                     pong_msg = {
                         'type': 'pong',
@@ -986,7 +1036,8 @@ if __name__ == "__main__":
                         user_info = result.update
                         
                         if user_info:
-                            logger.info("👤 拉取个人信息（提高账号活跃度）")
+                            # logger.info("👤 拉取个人信息（提高账号活跃度）")
+                            pass
                         else:
                             logger.debug("获取个人信息失败：返回为空")
                     except Exception as e:

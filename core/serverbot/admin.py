@@ -8,16 +8,18 @@ import re
 from .models import ClaimRecord
 
 
-# 自定义筛选器：按用户名筛选
+# 自定义筛选器：按账号筛选
 class UsernameFilter(SimpleListFilter):
-    title = '用户名'
+    title = '账号'
     parameter_name = 'username'
 
     def lookups(self, request, model_admin):
-        # 获取所有不同的用户名
+        # 获取所有不同的账号（使用 set 确保去重）
         usernames = ClaimRecord.objects.values_list('username', flat=True).distinct()
         usernames = [u for u in usernames if u]  # 过滤掉 None
-        return [(u, u) for u in sorted(usernames)]
+        # 使用 set 再次去重，然后排序
+        unique_usernames = sorted(set(usernames))
+        return [(u, u) for u in unique_usernames]
 
     def queryset(self, request, queryset):
         if self.value():
@@ -57,7 +59,7 @@ class ClaimRecordAdmin(admin.ModelAdmin):
     list_display = (
         'get_code_display',  # 优化代码显示
         'get_user_id_display',  # 优化用户标识显示
-        'get_username_display',  # 优化用户名显示
+        'get_username_display',  # 优化账号显示
         'get_status_display_colored',
         'get_bonus_display',
         'get_error_display',  # 优化错误信息显示
@@ -162,13 +164,13 @@ class ClaimRecordAdmin(admin.ModelAdmin):
     get_user_id_display.short_description = '用户标识'
     
     def get_username_display(self, obj):
-        """优化用户名显示"""
+        """优化账号显示"""
         username = obj.username
         if username:
             return mark_safe(f'<span style="color: #495057; font-weight: 500;">{username}</span>')
         else:
             return mark_safe('<span style="color: #999;">-</span>')
-    get_username_display.short_description = '用户名'
+    get_username_display.short_description = '账号'
     
     def get_error_display(self, obj):
         """优化错误信息显示（截断长文本）"""

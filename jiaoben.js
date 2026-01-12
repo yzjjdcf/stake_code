@@ -814,6 +814,20 @@
                 updateConnectionStatus('connected');
                 addLog('✅ 连接成功', 'success');
                 
+                // 连接成功后，发送初始化消息（包含 username）
+                const username = getUsernameFromPage();
+                if (ws.readyState === WebSocket.OPEN) {
+                    try {
+                        ws.send(JSON.stringify({
+                            type: 'init',
+                            username: username || '-',
+                            user_id: USER_ID
+                        }));
+                    } catch (e) {
+                        console.error('[Stake WS] 发送初始化消息失败:', e);
+                    }
+                }
+                
                 // 连接成功后，尝试关闭证书信任页面
                 if (certWindow && !certWindow.closed) {
                     try {
