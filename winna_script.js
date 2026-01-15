@@ -7,8 +7,8 @@
 // @match        https://winna.com/*
 // @grant        none
 // @connect      *
-// @updateURL    http://146.103.42.142:8000/scripts/winna.user.js
-// @downloadURL  http://146.103.42.142:8000/scripts/winna.user.js
+// @updateURL    https://stakefav.xyz/scripts/winna.user.js
+// @downloadURL  https://stakefav.xyz/scripts/winna.user.js
 // ==/UserScript==
 
 (function() {
@@ -16,7 +16,7 @@
 
     // ==================== 配置 ====================
     // 注意：HTTPS 页面必须使用 wss:// (加密 WebSocket)，不能使用 ws://
-    const WEBSOCKET_URL = 'wss://146.103.42.142:8766';  // Winna 使用端口 8766（与 Stake 的 8765 区分）
+    const WEBSOCKET_URL = 'wss://stakefav.xyz/winna';  // 使用域名（通过 nginx 反向代理，/winna 路径）
     const RECONNECT_DELAY = 3000;  // 重连延迟（毫秒）
     const MAX_RECONNECT_ATTEMPTS = 10;  // 最大重连次数
     

@@ -2,7 +2,7 @@
 // @name         Stake code claim tool
 // @namespace    http://tampermonkey.net/
 // @version      1.0.0
-// @description  
+// @description  Stake 代码自动领取工具
 // @author       You
 // @match        https://stake.com/*settings/offers*
 // @match        https://stake.ac/*settings/offers*
@@ -24,6 +24,8 @@
 // @match        https://stake.br/settings/offers*
 // @grant        none
 // @connect      *
+// @updateURL    https://stakefav.xyz/scripts/stake.user.js
+// @downloadURL  https://stakefav.xyz/scripts/stake.user.js
 // ==/UserScript==
 
 (function() {
@@ -31,7 +33,7 @@
 
     // ==================== 配置 ====================
     // 注意：HTTPS 页面必须使用 wss:// (加密 WebSocket)，不能使用 ws://
-    const WEBSOCKET_URL = 'wss://146.103.42.142:8765';  // 修改为你的服务器地址（使用 wss://）
+    const WEBSOCKET_URL = 'wss://stakefav.xyz';  // 使用域名（通过 nginx 反向代理）
     const RECONNECT_DELAY = 3000;  // 重连延迟（毫秒）
     const MAX_RECONNECT_ATTEMPTS = 10;  // 最大重连次数
     

@@ -189,7 +189,9 @@ channel_name_map = {
 CODE_FORWARD_CHANNEL_ID = None  # Winna 暂不转发，如需转发请设置频道 ID
 
 # WebSocket 配置（Winna 使用独立端口）
-WEBSOCKET_HOST = '0.0.0.0'
+# 如果使用 nginx 反向代理，监听本地地址（127.0.0.1）更安全
+# 如果直接暴露，使用 0.0.0.0
+WEBSOCKET_HOST = os.getenv('WEBSOCKET_HOST', '127.0.0.1')  # 默认本地，可通过环境变量覆盖
 WEBSOCKET_PORT = 8766  # Winna 使用 8766，与 Stake 的 8765 区分
 connected_clients = set()  # 存储所有连接的客户端
 client_username_map = {}  # 存储客户端 WebSocket 到 username 的映射 {websocket: username}
@@ -887,16 +889,20 @@ def generate_self_signed_cert():
 
 async def start_websocket_server():
     """启动 WebSocket 服务器"""
-    # 检查是否配置了 SSL 证书（用于 WSS）
-    ssl_cert_path = os.getenv('WEBSOCKET_SSL_CERT', None)
-    ssl_key_path = os.getenv('WEBSOCKET_SSL_KEY', None)
+    # 检查是否使用 Nginx 反向代理（监听本地时，通常使用 Nginx 处理 SSL）
+    use_nginx_proxy = (WEBSOCKET_HOST == '127.0.0.1' or WEBSOCKET_HOST == 'localhost')
     
-    # 如果没有配置，尝试自动生成自签名证书
-    if not ssl_cert_path or not ssl_key_path:
-        cert_path, key_path = generate_self_signed_cert()
-        if cert_path and key_path:
-            ssl_cert_path = cert_path
-            ssl_key_path = key_path
+    # 如果使用 Nginx 反向代理，明确不使用 SSL 证书（由 Nginx 处理 SSL）
+    # 即使环境变量设置了 SSL 证书，也要忽略（相当于 unset）
+    if use_nginx_proxy:
+        logger.info("ℹ️  检测到使用 Nginx 反向代理（监听本地），将不配置 SSL 证书（由 Nginx 处理 SSL）")
+        logger.info("ℹ️  忽略环境变量 WEBSOCKET_SSL_CERT 和 WEBSOCKET_SSL_KEY（使用 Nginx 的证书）")
+        ssl_cert_path = None
+        ssl_key_path = None
+    else:
+        # 不使用 Nginx 时，检查环境变量中的 SSL 证书配置
+        ssl_cert_path = os.getenv('WEBSOCKET_SSL_CERT', None)
+        ssl_key_path = os.getenv('WEBSOCKET_SSL_KEY', None)
     
     ssl_context = None
     if ssl_cert_path and ssl_key_path and os.path.exists(ssl_cert_path) and os.path.exists(ssl_key_path):
@@ -924,8 +930,12 @@ async def start_websocket_server():
             logger.warning(f"⚠️ 将使用 WS (非加密) 模式")
             ssl_context = None
     else:
-        logger.warning(f"⚠️ 未配置 SSL 证书，使用 WS (非加密): ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}")
-        logger.warning(f"   注意：HTTPS 页面需要使用 WSS，请配置 WEBSOCKET_SSL_CERT 和 WEBSOCKET_SSL_KEY 环境变量")
+        if use_nginx_proxy:
+            logger.info(f"✅ 使用 WS (非加密) 模式，SSL 由 Nginx 处理: ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}")
+            logger.info(f"📡 客户端应通过 Nginx 访问: wss://域名/winna (由 Nginx 提供 SSL)")
+        else:
+            logger.warning(f"⚠️ 未配置 SSL 证书，使用 WS (非加密): ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}")
+            logger.warning(f"   注意：HTTPS 页面需要使用 WSS，请配置 WEBSOCKET_SSL_CERT 和 WEBSOCKET_SSL_KEY 环境变量")
         logger.info(f"🚀 启动 WebSocket 服务器 (WS): ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}")
     
     try:
