@@ -1,5 +1,5 @@
 """
-使用 python-telegram (TDLib) 的监听器版本
+使用 python-telegram (TDLib) 的 Winna 监听器版本（完全独立于 Stake 业务）
 """
 import os
 import sys
@@ -30,7 +30,7 @@ if os.path.exists(config_path):
 
     TELEGRAM_API_ID = config_module.TELEGRAM_API_ID
     TELEGRAM_API_HASH = config_module.TELEGRAM_API_HASH
-    TELEGRAM_SESSION_FILE = os.path.join(project_root, 'db', 'tdlib')
+    TELEGRAM_SESSION_FILE = os.path.join(project_root, 'db', 'tdlib_winna')  # Winna 使用独立的 session 文件
     TELEGRAM_PROXY = getattr(config_module, 'TELEGRAM_PROXY', None)
     WEBSOCKET_PUBLIC_IP = getattr(config_module, 'WEBSOCKET_PUBLIC_IP', None)
 else:
@@ -39,7 +39,7 @@ else:
 # 日志配置（在 Django setup 之前，避免 Django 添加 handlers）
 log_dir = os.path.join(project_root, 'db', 'logs', 'listener')
 os.makedirs(log_dir, exist_ok=True)
-log_file = os.path.join(log_dir, 'listener_tdlib.log')
+log_file = os.path.join(log_dir, 'listener_winna.log')
 
 # 初始化 Django 环境
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'manager.settings')
@@ -49,6 +49,11 @@ django.setup()
 # Django setup 之后，重新配置日志（清除 Django 可能添加的 handlers）
 from parsers import CODE_PARSERS, parse_code_default
 from video_processor import parse_code_daily_code_async
+from winna_parsers import (
+    parse_winna_code,
+    parse_winna_code_video_async,
+    detect_winna_code_type
+)
 
 # WebSocket 相关
 try:
@@ -78,7 +83,7 @@ def configure_logging():
     root_logger.propagate = False  # 根 logger 不传播
     
     # 获取当前模块的 logger（使用独立的 logger，避免与其他模块冲突）
-    logger = logging.getLogger('listener_tdlib')
+    logger = logging.getLogger('listener_winna')
     logger.setLevel(logging.INFO)
     # 清除可能存在的旧 handlers（包括 Django 可能添加的）
     for handler in logger.handlers[:]:
@@ -157,45 +162,35 @@ for logger_name in django_loggers:
     for handler in django_log.handlers[:]:
         django_log.removeHandler(handler)
 
-# 目标频道列表
+# 目标频道列表（Winna 业务）
 target_channels = [
-    -1001738096535,
-    -1001977383442,
-    -1003315955015,
-    -1002032779602,
-    -1002140237447,  # 新添加的频道，使用 code_format_parser
+    -1002472636693,  # Winna 主频道
+    -1003637861334,  # Winna 测试频道
 ]
 
-# 核心频道列表（用于 openChat 优化，提高更新优先级）
-# 包含所有目标频道，用于拉活和提高优先级
-core_channels = target_channels.copy()  # 包含所有频道，包括测试频道
-
-# 测试频道 ID（用于消息处理逻辑，判断是否是测试频道）
-TEST_CHANNEL_ID = -1003315955015
+# 核心频道列表（用于 openChat 优化，最多 1-2 个最核心的频道）
+# 这些频道会调用 openChat 获得最高优先级的推送
+core_channels = [
+    -1002472636693,  # Winna 主频道（最核心）
+]
 
 channel_id_map = {
-    -1002032779602: 'high_rollers_parser',  # HighRollersStake
-    -1001977383442: 'daily_code_parser',    # daily
-    -1003315955015: 'daily_code_parser',    # stake_cn_chat_room
-    -1001738096535: 'rains_team_parser',    # RainsTEAM
-    -1002140237447: 'code_format_parser',   # 新频道，解析 Code: stakecode 格式
+    -1002472636693: 'default_parser',  # Winna 主频道，使用默认解析器
+    -1003637861334: 'default_parser',  # Winna 测试频道，使用默认解析器
 }
 
 # 频道名称映射（用于日志输出）
 channel_name_map = {
-    -1002032779602: 'high_roller',      # HighRollersStake
-    -1001977383442: 'daily_drop',       # daily
-    -1003315955015: '测试频道',          # stake_cn_chat_room
-    -1001738096535: '周奖频道',          # RainsTEAM
-    -1002140237447: 'FC频道',            # 新频道
+    -1002472636693: 'Winna主频道',
+    -1003637861334: 'Winna测试频道',
 }
 
-# 代码转发目标频道
-CODE_FORWARD_CHANNEL_ID = -1003559537591
+# 代码转发目标频道（Winna 业务，如果需要转发，请修改此 ID）
+CODE_FORWARD_CHANNEL_ID = None  # Winna 暂不转发，如需转发请设置频道 ID
 
-# WebSocket 配置
+# WebSocket 配置（Winna 使用独立端口）
 WEBSOCKET_HOST = '0.0.0.0'
-WEBSOCKET_PORT = 8765
+WEBSOCKET_PORT = 8766  # Winna 使用 8766，与 Stake 的 8765 区分
 connected_clients = set()  # 存储所有连接的客户端
 client_username_map = {}  # 存储客户端 WebSocket 到 username 的映射 {websocket: username}
 client_addr_map = {}  # 存储客户端 WebSocket 到地址的映射 {websocket: (ip, port)}
@@ -203,7 +198,7 @@ websocket_loop = None  # 存储 WebSocket 服务器的事件循环
 
 # 线程池执行器（用于异步处理消息，避免阻塞主线程）
 # 使用最多 4 个工作线程，避免过多线程导致资源竞争
-message_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="msg_handler")
+message_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="winna_msg_handler")
 
 # telegram 客户端 (python-telegram / tdlib)
 try:
@@ -304,7 +299,7 @@ def handle_update(update):
 def process_message_async(update):
     """
     异步处理消息（在线程池中执行）
-    优化：提取到 code 后第一时间发送给客户端，其他操作异步执行
+    包含所有耗时操作：视频下载、代码解析、转发等
     """
     # 第一时间记录收到 update 的时间
     update_received_time = datetime.now()
@@ -313,9 +308,16 @@ def process_message_async(update):
     try:
         message = update.get('message', {})
         chat_id = message.get('chat_id')
-        message_date = message.get('date', 0)
+
+        # 获取消息的原始发送时间（Telegram 服务器时间）
+        message_date = message.get('date', 0)  # Unix 时间戳（秒）
         message_id = message.get('id', 0)
-        channel_name = channel_name_map.get(chat_id, message.get('chat', {}).get('title', '未知频道'))
+        
+        chat_title = message.get('chat', {}).get('title', '未知频道')
+        is_outgoing = message.get('is_outgoing', False)
+        
+        # 获取频道名称（优先使用映射的名称，如果没有则使用原始标题）
+        channel_name = channel_name_map.get(chat_id, chat_title)
         
         # 文本/caption
         content = message.get('content', {})
@@ -325,6 +327,7 @@ def process_message_async(update):
             text_entities = content.get('text', {}).get('text', '') or ''
         caption = content.get('caption', {}).get('text', '') if 'caption' in content else ''
         raw_text = text_entities or caption or ''
+
         has_video = msg_type == 'messageVideo'
         
         if not raw_text and not has_video:
@@ -332,118 +335,173 @@ def process_message_async(update):
 
         parser_name = channel_id_map.get(chat_id, 'default_parser')
         parser_func = CODE_PARSERS.get(parser_name, parse_code_default)
-        TEST_USERNAMES = ['yzjjdcf', 'hk888888']
-        is_test_channel = (chat_id == TEST_CHANNEL_ID)
-        FC_CHANNEL_ID = -1002140237447
-        is_fc_channel = (chat_id == FC_CHANNEL_ID)
-        
-        # 快速提取代码
+
+        # Winna 频道直接使用文本解析（不使用视频解析）
         code = None
-        if is_fc_channel:
-            code = parser_func(raw_text)
-            if not code:
-                return
         
-        # 计算延迟（保留延迟日志）
+        # 先记录日志，再提取代码
+        # 计算延迟信息（用于日志和转发消息）
         delay_ms = None
+        message_datetime = None
         if message_date > 0:
             message_datetime = datetime.fromtimestamp(message_date)
+            # 计算延迟差值（毫秒）
             delay_seconds = (update_received_time - message_datetime).total_seconds()
             delay_ms = int(delay_seconds * 1000)
+            # 记录消息接收时间和发送时间（合并为一条日志，减少 I/O）
+            logger.info(
+                f"📨 收到消息 | "
+                f"频道: {channel_name} | "
+                f"消息ID: {message_id} | "
+                f"发送时间: {message_datetime.strftime('%H:%M:%S.%f')[:-3]} | "
+                f"收到时间: {update_received_time.strftime('%H:%M:%S.%f')[:-3]} | "
+                f"延迟: {delay_ms}ms"
+            )
+        else:
+            # 如果没有发送时间，只记录收到时间
+            logger.info(f"📨 收到消息 | 频道: {channel_name} | 消息ID: {message_id} | 收到时间: {update_received_time.strftime('%H:%M:%S.%f')[:-3]}")
         
-        # 视频解析（如果需要）
-        if not code:
-            if parser_name == 'daily_code_parser' and has_video:
-                video = content.get('video', {}).get('video', {})
-                file_id = video.get('id')
-                if file_id:
-                    video_path = download_video_file(file_id)
-                    if video_path:
-                        class DummyMessage:
-                            pass
-                        dummy_msg = DummyMessage()
-                        dummy_msg.file_path = video_path
+        # 优化：合并日志输出，减少 I/O 次数
+        logger.info(f"✅ 匹配到目标频道: {channel_name} ({chat_id}) | 类型: {'视频+文字' if has_video else '文字'} | 内容: {raw_text[:100] if raw_text else '[媒体]'}")
+        
+        # 使用 Winna 专用解析器
+        code = None
+        code_type = None
+        
+        # 检测代码类型
+        code_part, detected_type = detect_winna_code_type(raw_text)
+        
+        if detected_type == 'video_text' and has_video:
+            # 视频+文字类型：需要异步处理
+            logger.info("🎬 检测到视频+文字类型，开始异步视频解析...")
+            
+            # 获取视频文件 ID
+            video = content.get('video', {}).get('video', {})
+            file_id = video.get('id')
+            
+            if file_id:
+                # 下载视频文件（同步）
+                video_path = download_video_file(file_id)
+                
+                if video_path:
+                    # 创建适配对象
+                    class DummyMessage:
+                        pass
+                    dummy_msg = DummyMessage()
+                    dummy_msg.file_path = video_path
+                    
+                    # 定义下载函数（直接返回已下载的文件路径）
+                    def download_func(msg):
+                        return video_path
+                    
+                    # 异步解析视频
+                    try:
+                        import asyncio
                         try:
                             loop = asyncio.get_event_loop()
                         except RuntimeError:
                             loop = asyncio.new_event_loop()
                             asyncio.set_event_loop(loop)
+                        
                         code = loop.run_until_complete(
-                            parse_code_daily_code_async(
-                                raw_text,
-                                message=dummy_msg,
-                                has_video=True,
-                                download_func=lambda m: video_path
-                            )
+                            parse_winna_code_video_async(raw_text, dummy_msg, download_func)
                         )
+                    except Exception as e:
+                        logger.error(f"❌ Winna 视频解析失败: {e}", exc_info=True)
+                        code = None
+                else:
+                    logger.error("❌ 视频下载失败")
+                    code = None
             else:
-                code = parser_func(raw_text)
+                logger.warning("⚠️ 无法获取视频文件 ID")
+                code = None
+                
+        elif detected_type == 'puzzle':
+            # 猜谜类型：使用 AI 猜谜（同步）
+            logger.info("🧩 检测到猜谜类型，使用 AI 猜谜...")
+            code = parse_winna_code(raw_text, message, has_video)
+            
+        else:
+            # 其他类型：使用普通文本解析
+            code = parse_winna_code(raw_text, message, has_video)
+            # 如果返回特殊标记，说明是视频类型但没有视频
+            if code == 'VIDEO_TEXT_TYPE':
+                logger.warning("⚠️ 检测到视频+文字类型，但消息中没有视频")
+                code = None
 
         if not code:
+            logger.warning(f"⚠️ 无法从消息中提取代码（类型: {detected_type}）")
             return
-        
-        # ✅ 第一时间发送给客户端（最高优先级）
+
+        logger.info(f"✅ 提取的代码: {code} | 类型: {detected_type} | 频道: {channel_name}")
+
+        # 转发代码到指定频道（如果配置了转发频道）
+        if CODE_FORWARD_CHANNEL_ID:
+            try:
+                # 获取当前时间（毫秒级精度）
+                current_time = datetime.now()
+                time_str = current_time.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]  # 格式：2026-01-09 14:45:11.123
+                
+                # 构建转发消息（包含延迟信息）
+                if message_date > 0:
+                    # 有延迟信息
+                    forward_message = f"🎁 Winna新代码: {code}\n来源: {channel_name}\n时间: {time_str}\n延迟: {delay_ms}ms"
+                else:
+                    # 没有延迟信息
+                    forward_message = f"🎁 Winna新代码: {code}\n来源: {channel_name}\n时间: {time_str}"
+                send_result = tg.call_method(
+                    "sendMessage",
+                    {
+                        "chat_id": CODE_FORWARD_CHANNEL_ID,
+                        "input_message_content": {
+                            "@type": "inputMessageText",
+                            "text": {
+                                "@type": "formattedText",
+                                "text": forward_message
+                            }
+                        }
+                    }
+                )
+                send_result.wait()
+                if send_result.update:
+                    logger.info(f"📤 代码已转发到频道 {CODE_FORWARD_CHANNEL_ID}: {code} | 来源: {channel_name} | 时间: {time_str}")
+                else:
+                    logger.warning(f"⚠️ 代码转发失败: {code} | 来源: {channel_name}")
+            except Exception as e:
+                logger.error(f"❌ 转发代码到频道失败: {e} | 来源: {channel_name}", exc_info=True)
+
+        # 通过 WebSocket 分发代码给所有连接的客户端
         server_time = datetime.now()
-        server_timestamp_ms = int(server_time.timestamp() * 1000)
+        server_timestamp_ms = int(server_time.timestamp() * 1000)  # Unix 时间戳（毫秒）
+        
         message_data = {
             'type': 'code_detected',
             'code': code,
             'channel_id': chat_id,
-            'channel_title': channel_name,
+            'channel_title': channel_name,  # 使用映射的频道名称
             'parser': parser_name,
             'timestamp': server_time.isoformat(),
-            'server_timestamp_ms': server_timestamp_ms,
+            'server_timestamp_ms': server_timestamp_ms,  # 服务器时间戳（毫秒），用于客户端同步时间
             'message_received_time': time.perf_counter()
         }
         
-        filter_usernames = TEST_USERNAMES if is_test_channel else None
+        # 异步发送到所有客户端（使用线程安全的方式）
         try:
+            # 尝试获取 WebSocket 服务器的事件循环
             ws_loop = get_websocket_loop()
             if ws_loop and ws_loop.is_running():
+                # 使用 run_coroutine_threadsafe 在线程安全的方式下执行协程
                 asyncio.run_coroutine_threadsafe(
-                    broadcast_to_clients(message_data, filter_usernames=filter_usernames),
+                    broadcast_to_clients(message_data),
                     ws_loop
                 )
             else:
-                Thread(target=lambda: asyncio.run(broadcast_to_clients(message_data, filter_usernames=filter_usernames)), daemon=True).start()
+                # 如果 WebSocket 循环不可用，使用线程执行
+                Thread(target=lambda: asyncio.run(broadcast_to_clients(message_data)), daemon=True).start()
         except Exception as e:
-            logger.error(f"❌ 分发代码失败: {e}")
+            logger.error(f"❌ 分发代码到客户端失败: {e}", exc_info=True)
         
-        # 关键日志：代码信息写入文件，延迟信息只输出到控制台（不写入文件）
-        logger.info(f"📨 {channel_name} | 代码: {code}")
-        # 延迟信息只输出到控制台，不写入文件
-        if delay_ms is not None:
-            print(f"📨 {channel_name} | 延迟: {delay_ms}ms | 代码: {code}")
-        else:
-            print(f"📨 {channel_name} | 代码: {code}")
-
-        # 其他操作异步执行（不阻塞客户端发送）
-        def do_other_tasks():
-            try:
-                # 转发代码到指定频道
-                if CODE_FORWARD_CHANNEL_ID:
-                    current_time = datetime.now()
-                    time_str = current_time.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-                    forward_message = f"🎁 新代码: {code}\n来源: {channel_name}\n时间: {time_str}" + (f"\n延迟: {delay_ms}ms" if delay_ms else "")
-                    send_result = tg.call_method(
-                        "sendMessage",
-                        {
-                            "chat_id": CODE_FORWARD_CHANNEL_ID,
-                            "input_message_content": {
-                                "@type": "inputMessageText",
-                                "text": {
-                                    "@type": "formattedText",
-                                    "text": forward_message
-                                }
-                            }
-                        }
-                    )
-                    send_result.wait()
-            except Exception:
-                pass  # 静默失败，不影响主流程
-        
-        # 异步执行其他任务
-        message_executor.submit(do_other_tasks)
+        logger.info(f"📡 代码已通过 WebSocket 分发: {code} (客户端数: {len(connected_clients)})")
 
     except Exception as e:
         logger.error(f"❌ 处理 update 时出错: {e}", exc_info=True)
@@ -455,43 +513,10 @@ def get_websocket_loop():
     return websocket_loop
 
 
-def keep_alive_with_openchat():
-    """
-    使用 openChat 拉活，提高账号活跃度和频道更新优先级
-    对核心频道（除测试频道外的所有频道）调用 openChat，模拟用户打开聊天窗口
-    """
-    try:
-        if not core_channels:
-            logger.info("ℹ️ 未配置核心频道，跳过 openChat 拉活")
-            return
-        
-        logger.info(f"📡 正在打开核心频道聊天窗口（拉活 + 提高更新优先级，共 {len(core_channels)} 个）...")
-        success_count = 0
-        
-        for chat_id in core_channels:
-            try:
-                # 调用 openChat 模拟用户打开聊天窗口
-                open_result = tg.call_method("openChat", {"chat_id": chat_id})
-                open_result.wait(timeout=5)  # 设置超时
-                channel_name = channel_name_map.get(chat_id, f"频道{chat_id}")
-                logger.info(f"✅ 已打开核心频道: {channel_name} (将获得最高优先级推送)")
-                success_count += 1
-            except Exception as e:
-                channel_name = channel_name_map.get(chat_id, f"频道{chat_id}")
-                logger.warning(f"⚠️ 打开核心频道 {channel_name} 失败: {e}")
-        
-        if success_count > 0:
-            logger.info(f"✅ 核心频道已打开（{success_count}/{len(core_channels)} 成功，将获得最高优先级的更新推送）")
-        else:
-            logger.warning("⚠️ 所有核心频道打开失败")
-    except Exception as e:
-        logger.warning(f"⚠️ openChat 拉活失败: {e}")
-
-
 def save_connections_to_file():
     """保存当前连接信息到文件"""
     try:
-        conn_file = os.path.join(project_root, 'db', 'websocket_stake_connections.json')
+        conn_file = os.path.join(project_root, 'db', 'websocket_winna_connections.json')
         os.makedirs(os.path.dirname(conn_file), exist_ok=True)
         
         connections = []
@@ -509,7 +534,7 @@ def save_connections_to_file():
                 })
         
         data = {
-            'service': 'stake',
+            'service': 'winna',
             'port': WEBSOCKET_PORT,
             'total_connections': len(connections),
             'last_update': datetime.now().isoformat(),
@@ -522,77 +547,70 @@ def save_connections_to_file():
         logger.debug(f"保存连接信息失败: {e}")
 
 
-async def broadcast_to_clients(message_data, filter_usernames=None):
-    """
-    向所有连接的客户端广播消息（增强稳定性：超时控制、错误处理）
-    
-    Args:
-        message_data: 要发送的消息数据
-        filter_usernames: 如果指定，只发送给这些 username 的客户端（用于测试频道）
-    """
+def save_connections_to_file():
+    """保存当前连接信息到文件"""
+    try:
+        conn_file = os.path.join(project_root, 'db', 'websocket_winna_connections.json')
+        os.makedirs(os.path.dirname(conn_file), exist_ok=True)
+        
+        connections = []
+        for client in connected_clients:
+            addr = client_addr_map.get(client)
+            username = client_username_map.get(client, '-')
+            
+            if addr:
+                ip, port = addr
+                connections.append({
+                    'username': username,
+                    'ip': ip,
+                    'port': port,
+                    'last_update': datetime.now().isoformat()
+                })
+        
+        data = {
+            'service': 'winna',
+            'port': WEBSOCKET_PORT,
+            'total_connections': len(connections),
+            'last_update': datetime.now().isoformat(),
+            'connections': connections
+        }
+        
+        with open(conn_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.debug(f"保存连接信息失败: {e}")
+
+
+async def broadcast_to_clients(message_data):
+    """向所有连接的客户端广播消息"""
     if not connected_clients:
         logger.debug("⚠️ 没有连接的客户端，消息未发送")
         return
     
     message_json = json.dumps(message_data, ensure_ascii=False)
     disconnected = set()
-    sent_count = 0
     
-    for client in list(connected_clients):  # 使用列表副本，避免迭代时修改
+    for client in connected_clients:
         try:
-            # 检查连接是否已关闭
-            if client.closed:
-                disconnected.add(client)
-                continue
-            
-            # 如果指定了过滤条件，检查客户端的 username
-            if filter_usernames:
-                client_username = client_username_map.get(client)
-                if client_username not in filter_usernames:
-                    continue  # 跳过不在测试账号列表中的客户端
-            
-            # 发送消息，设置超时（5秒）
-            try:
-                await asyncio.wait_for(client.send(message_json), timeout=5.0)
-                sent_count += 1
-            except asyncio.TimeoutError:
-                # 发送超时，连接可能有问题
-                disconnected.add(client)
-            except websockets.exceptions.ConnectionClosed:
-                disconnected.add(client)
-            except websockets.exceptions.ConnectionClosedError:
-                disconnected.add(client)
-            except websockets.exceptions.ConnectionClosedOK:
-                disconnected.add(client)
+            await client.send(message_json)
         except Exception as e:
-            # 其他异常，标记为断开
+            logger.warning(f"⚠️ 发送消息到客户端失败: {e}")
             disconnected.add(client)
     
     # 移除断开的客户端
-    for client in disconnected:
-        connected_clients.discard(client)
-        client_username_map.pop(client, None)  # 同时移除 username 映射
-        client_addr_map.pop(client, None)  # 移除地址映射
-    
+    connected_clients.difference_update(disconnected)
     if disconnected:
-        save_connections_to_file()  # 更新连接信息
-    
-    if filter_usernames:
-        logger.info(f"📡 测试频道消息已发送给 {sent_count} 个测试账号客户端")
+        logger.info(f"🔌 移除了 {len(disconnected)} 个断开的客户端连接")
 
 
 async def websocket_handler(websocket, path):
-    """WebSocket 连接处理器（增强稳定性：心跳检测、超时控制）"""
+    """WebSocket 连接处理器"""
     client_addr = websocket.remote_address
     client_username = None  # 客户端用户名（等待初始化消息）
     connected_clients.add(websocket)
     client_addr_map[websocket] = client_addr  # 保存地址映射
+    logger.info(f"🔌 新客户端连接: {client_addr}")
     save_connections_to_file()  # 保存连接信息
-    
-    # 设置 WebSocket 超时和保活参数
-    websocket.timeout = 60  # 60秒超时
-    last_ping_time = time.time()
-    ping_interval = 30  # 每30秒发送一次 ping
     
     try:
         # 发送欢迎消息（包含服务器时间戳，用于客户端时间同步）
@@ -607,82 +625,49 @@ async def websocket_handler(websocket, path):
         }
         await websocket.send(json.dumps(welcome_msg, ensure_ascii=False))
         
-        # 启动心跳任务（服务器主动发送 ping）
-        async def heartbeat_task():
-            """服务器主动心跳检测"""
+        # 保持连接，等待客户端消息（心跳、领取结果等）
+        async for message in websocket:
             try:
-                while True:
-                    await asyncio.sleep(ping_interval)
-                    if websocket.closed:
-                        break
-                    try:
-                        # 发送 ping 帧
-                        await websocket.ping()
-                        last_ping_time = time.time()
-                    except Exception as e:
-                        # ping 失败，连接可能已断开
-                        break
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
-        
-        heartbeat = asyncio.create_task(heartbeat_task())
-        
-        try:
-            # 保持连接，等待客户端消息（心跳、领取结果等）
-            async for message in websocket:
-                try:
-                    data = json.loads(message)
-                    if data.get('type') == 'init':
-                        # 接收客户端初始化消息（包含 username）
-                        client_username = data.get('username', '-')
-                        # 保存 username 映射
-                        if client_username and client_username != '-':
-                            client_username_map[websocket] = client_username
-                            logger.info(f"🔌 客户端账号信息: {client_addr} | 账号: {client_username}")
-                            save_connections_to_file()  # 更新连接信息
-                    elif data.get('type') == 'ping':
-                        # 响应心跳
-                        pong_msg = {
-                            'type': 'pong',
-                            'timestamp': datetime.now().isoformat()
-                        }
-                        await websocket.send(json.dumps(pong_msg, ensure_ascii=False))
-                    elif data.get('type') == 'claim_result':
-                        # 处理领取结果（异步执行，不阻塞）
-                        asyncio.create_task(handle_claim_result(data))
-                except json.JSONDecodeError:
-                    logger.warning(f"⚠️ 收到无效的 JSON 消息: {message}")
-                except Exception as e:
-                    logger.error(f"❌ 处理客户端消息时出错: {e}", exc_info=True)
-        finally:
-            # 取消心跳任务
-            heartbeat.cancel()
-            try:
-                await heartbeat
-            except asyncio.CancelledError:
-                pass
-                
+                logger.info(f"📨 收到原始消息（长度: {len(message)} 字节）: {message[:200]}...")
+                data = json.loads(message)
+                logger.info(f"📨 解析后的消息类型: {data.get('type')}, 完整数据: {json.dumps(data, ensure_ascii=False)[:300]}")
+                if data.get('type') == 'init':
+                    # 接收客户端初始化消息（包含 username）
+                    client_username = data.get('username', '-')
+                    if client_username and client_username != '-':
+                        client_username_map[websocket] = client_username
+                        logger.info(f"🔌 客户端账号信息: {client_addr} | 账号: {client_username}")
+                        save_connections_to_file()  # 更新连接信息
+                    else:
+                        logger.info(f"🔌 客户端账号信息: {client_addr} | 账号: 未获取")
+                elif data.get('type') == 'ping':
+                    # 响应心跳
+                    pong_msg = {
+                        'type': 'pong',
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    await websocket.send(json.dumps(pong_msg, ensure_ascii=False))
+                elif data.get('type') == 'claim_result':
+                    # 处理领取结果（异步执行，不阻塞）
+                    logger.info(f"📨 收到领取结果消息: code={data.get('code')}, status={data.get('status')}, user_id={data.get('user_id')}")
+                    logger.info(f"📨 领取结果详情: {json.dumps(data, ensure_ascii=False)[:500]}")
+                    asyncio.create_task(handle_claim_result(data))
+                else:
+                    # 记录未知消息类型
+                    logger.warning(f"⚠️ 收到未知消息类型: {data.get('type')}, 完整数据: {json.dumps(data, ensure_ascii=False)[:200]}")
+            except json.JSONDecodeError:
+                logger.warning(f"⚠️ 收到无效的 JSON 消息: {message}")
+            except Exception as e:
+                logger.error(f"❌ 处理客户端消息时出错: {e}", exc_info=True)
     except websockets.exceptions.ConnectionClosed:
-        pass
-    except websockets.exceptions.ConnectionClosedError:
-        pass
-    except websockets.exceptions.ConnectionClosedOK:
-        pass
-    except asyncio.TimeoutError:
-        pass
+        logger.info(f"🔌 客户端断开连接: {client_addr}")
     except Exception as e:
         logger.error(f"❌ WebSocket 处理错误: {e}", exc_info=True)
     finally:
-        # 记录移除日志（如果有用户名）
-        client_username = client_username_map.get(websocket)
-        if client_username:
-            logger.info(f"🔌 客户端账号信息: {client_addr} | 账号: {client_username} | 已断开")
-        
         connected_clients.discard(websocket)
         client_username_map.pop(websocket, None)  # 移除 username 映射
         client_addr_map.pop(websocket, None)  # 移除地址映射
+        logger.info(f"🔌 客户端已移除: {client_addr} (剩余连接: {len(connected_clients)})")
         save_connections_to_file()  # 更新连接信息
 
 
@@ -750,16 +735,16 @@ async def handle_claim_result(data):
         }
         final_status = status_mapping.get(status, 'error')
         
-        # 创建 ClaimRecord（只保存 username 字符串，不关联其他表）
+        # 创建 WinnaClaimRecord（只保存 username 字符串，不关联其他表）
         # 使用 sync_to_async 包装同步的 Django ORM 操作
         try:
-            from serverbot.models import ClaimRecord
+            from winna.models import WinnaClaimRecord
             
             # 定义同步函数
             def create_claim_record():
-                return ClaimRecord.objects.create(
+                return WinnaClaimRecord.objects.create(
                     user_id=user_id,  # 用户标识符（用于区分不同使用者）
-                    username=username,  # Stake 账号用户名字符串
+                    username=username,  # Winna 账号用户名字符串
                     code=code,
                     status=final_status,
                     bonus_value=bonus_value,  # 显示用的字符串
@@ -774,9 +759,9 @@ async def handle_claim_result(data):
             # 使用 sync_to_async 异步执行
             claim_record = await sync_to_async(create_claim_record)()
             user_display = f"{user_id or '未知用户'}" + (f" ({username})" if username else "")
-            logger.info(f"✅ 领取结果已入库: {user_display} - {code} ({final_status})")
+            logger.info(f"✅ Winna 领取结果已入库: {user_display} - {code} ({final_status})")
         except Exception as e:
-            logger.error(f"❌ 创建 ClaimRecord 失败: {e}", exc_info=True)
+            logger.error(f"❌ 创建 WinnaClaimRecord 失败: {e}", exc_info=True)
             
     except Exception as e:
         logger.error(f"❌ 处理领取结果时出错: {e}", exc_info=True)
@@ -793,8 +778,8 @@ def generate_self_signed_cert():
         
         cert_dir = os.path.join(project_root, 'db', 'ssl')
         os.makedirs(cert_dir, exist_ok=True)
-        cert_path = os.path.join(cert_dir, 'websocket.crt')
-        key_path = os.path.join(cert_dir, 'websocket.key')
+        cert_path = os.path.join(cert_dir, 'websocket_winna.crt')  # Winna 使用独立的证书文件
+        key_path = os.path.join(cert_dir, 'websocket_winna.key')
         
         # 如果证书已存在且未过期，直接使用
         if os.path.exists(cert_path) and os.path.exists(key_path):
@@ -818,7 +803,7 @@ def generate_self_signed_cert():
             x509.NameAttribute(NameOID.COUNTRY_NAME, "CN"),
             x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, "Internet"),
             x509.NameAttribute(NameOID.LOCALITY_NAME, "Internet"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Stake Code Listener"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Winna Code Listener"),
             x509.NameAttribute(NameOID.COMMON_NAME, "localhost"),
         ])
         
@@ -944,22 +929,7 @@ async def start_websocket_server():
         logger.info(f"🚀 启动 WebSocket 服务器 (WS): ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}")
     
     try:
-        # 增强稳定性配置
-        # 注意：max_queue 是每个连接的消息队列大小，不影响总连接数
-        # 支持大量并发连接（100+），每个连接独立队列
-        async with serve(
-            websocket_handler, 
-            WEBSOCKET_HOST, 
-            WEBSOCKET_PORT, 
-            ssl=ssl_context,
-            ping_interval=30,  # 每30秒发送一次 ping
-            ping_timeout=10,   # ping 超时时间10秒
-            close_timeout=10,  # 关闭超时时间10秒
-            max_size=10 * 1024 * 1024,  # 最大消息大小 10MB
-            max_queue=256,  # 每个连接的最大队列大小（支持高并发消息发送）
-            read_limit=2**16,  # 读取限制
-            write_limit=2**16  # 写入限制
-        ):
+        async with serve(websocket_handler, WEBSOCKET_HOST, WEBSOCKET_PORT, ssl=ssl_context):
             logger.info(f"✅ WebSocket 服务器已成功启动并监听端口 {WEBSOCKET_PORT}")
             await asyncio.Future()  # 永久运行
     except Exception as e:
@@ -1085,8 +1055,27 @@ if __name__ == "__main__":
         except Exception as e:
             logger.warning(f"⚠️ 预加载对话失败: {e}")
         
-        # 初始化时打开核心频道（拉活）
-        keep_alive_with_openchat()
+        # 优化：对核心频道调用 openChat，模拟用户打开聊天窗口
+        # 这会让服务器以最高优先级推送这些频道的更新
+        # 注意：只打开 1-2 个最核心的频道，避免被服务器认为是异常行为
+        try:
+            if core_channels:
+                logger.info(f"📡 正在打开核心频道聊天窗口（提高更新优先级，共 {len(core_channels)} 个）...")
+                for chat_id in core_channels:
+                    try:
+                        # 调用 openChat 模拟用户打开聊天窗口
+                        open_result = tg.call_method("openChat", {"chat_id": chat_id})
+                        open_result.wait(timeout=5)  # 设置超时
+                        channel_name = channel_name_map.get(chat_id, f"频道{chat_id}")
+                        logger.info(f"✅ 已打开核心频道: {channel_name} (将获得最高优先级推送)")
+                    except Exception as e:
+                        channel_name = channel_name_map.get(chat_id, f"频道{chat_id}")
+                        logger.warning(f"⚠️ 打开核心频道 {channel_name} 失败: {e}")
+                logger.info("✅ 核心频道已打开（将获得最高优先级的更新推送）")
+            else:
+                logger.info("ℹ️ 未配置核心频道，跳过 openChat 优化")
+        except Exception as e:
+            logger.warning(f"⚠️ 打开核心频道失败: {e}")
 
         # 优化：设置消息接收优先级
         try:
@@ -1148,6 +1137,39 @@ if __name__ == "__main__":
         logger.info("🎧 TDLib 监听启动，等待消息...")
         logger.info(f"📡 WebSocket 服务地址: ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}")
         logger.info("⚡ 已启用延迟优化配置")
+        
+        # 启动定期拉取个人信息任务（提高账号活跃度）
+        def fetch_user_info_periodically():
+            """定期拉取个人信息，提高账号活跃度"""
+            while True:
+                try:
+                    # 随机间隔 3-5 分钟（180-300 秒）
+                    interval = random.randint(180, 300)
+                    time.sleep(interval)
+                    
+                    # 获取个人信息
+                    try:
+                        result = tg.call_method("getMe")
+                        result.wait()
+                        user_info = result.update
+                        
+                        if user_info:
+                            # logger.info("👤 拉取个人信息（提高账号活跃度）")
+                            pass
+                        else:
+                            logger.debug("获取个人信息失败：返回为空")
+                    except Exception as e:
+                        logger.debug(f"获取个人信息失败: {e}")
+                        
+                except Exception as e:
+                    logger.error(f"❌ 定期拉取个人信息任务异常: {e}", exc_info=True)
+                    # 出错后等待一段时间再继续
+                    time.sleep(60)
+        
+        # 启动定期拉取个人信息的后台线程
+        user_info_thread = Thread(target=fetch_user_info_periodically, daemon=True)
+        user_info_thread.start()
+        logger.info("✅ 已启动定期拉取个人信息任务（每3-5分钟触发一次，提高账号活跃度）")
         
         tg.idle()
     except KeyboardInterrupt:

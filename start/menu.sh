@@ -15,33 +15,47 @@ NC='\033[0m' # No Color
 show_menu() {
     clear
     echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║     Stake 服务管理菜单                 ║${NC}"
+    echo -e "${BLUE}║     服务管理菜单                       ║${NC}"
     echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "${GREEN}1)${NC} 启动所有服务"
+    echo -e "${GREEN}════════════════════════════════════════${NC}"
+    echo -e "${GREEN}  Stake 业务${NC}"
+    echo -e "${GREEN}════════════════════════════════════════${NC}"
+    echo -e "${GREEN}1)${NC} 启动所有服务（Django + Stake Listener + Winna Listener）"
     echo -e "${GREEN}2)${NC} 停止所有服务"
     echo -e "${GREEN}3)${NC} 重启所有服务"
     echo -e "${GREEN}4)${NC} 查看服务状态"
     echo ""
     echo -e "${GREEN}1a)${NC} 仅启动 Django"
-    echo -e "${GREEN}1b)${NC} 仅启动 Listener"
+    echo -e "${GREEN}1b)${NC} 仅启动 Stake Listener"
     echo -e "${GREEN}2a)${NC} 仅停止 Django"
-    echo -e "${GREEN}2b)${NC} 仅停止 Listener"
+    echo -e "${GREEN}2b)${NC} 仅停止 Stake Listener"
     echo ""
     echo -e "${YELLOW}5)${NC} 查看 Django 日志 (按 q 退出)"
-    echo -e "${YELLOW}6)${NC} 查看 Listener 日志 (按 q 退出)"
+    echo -e "${YELLOW}6)${NC} 查看 Stake Listener 日志 (按 q 退出)"
     echo -e "${YELLOW}7)${NC} 查看过盾日志 (按 q 退出)"
-    echo -e "${YELLOW}8)${NC} 同时查看所有日志 (按 q 退出)"
     echo ""
+    echo -e "${GREEN}════════════════════════════════════════${NC}"
+    echo -e "${GREEN}  Winna 业务（完全隔离）${NC}"
+    echo -e "${GREEN}════════════════════════════════════════${NC}"
+    echo -e "${GREEN}1w)${NC} 仅启动 Winna Listener"
+    echo -e "${GREEN}2w)${NC} 仅停止 Winna Listener"
+    echo -e "${YELLOW}6w)${NC} 查看 Winna Listener 日志 (按 q 退出)"
+    echo ""
+    echo -e "${BLUE}════════════════════════════════════════${NC}"
+    echo -e "${BLUE}  其他功能${NC}"
+    echo -e "${BLUE}════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}8)${NC} 同时查看所有日志 (按 q 退出)"
     echo -e "${BLUE}9)${NC} 运行数据库迁移"
     echo -e "${BLUE}10)${NC} 创建超级管理员"
     echo -e "${BLUE}11)${NC} 检查 Listener 状态"
     echo -e "${BLUE}12)${NC} 校准服务器时间"
     echo -e "${BLUE}13)${NC} 实时时间对比（每秒更新）"
+    echo -e "${BLUE}14)${NC} 查看连接的客户端列表（Stake + Winna）"
     echo ""
     echo -e "${RED}0)${NC} 退出"
     echo ""
-    echo -n "请选择 [0-13, 1a-2b]: "
+    echo -n "请选择 [0-14, 1a-2b, 1w-2w, 6w]: "
 }
 
 # 启动所有服务
@@ -62,11 +76,20 @@ start_django_only() {
     read -p "按回车键继续..."
 }
 
-# 仅启动 Listener
+# 仅启动 Stake Listener
 start_listener_only() {
-    echo -e "${GREEN}🚀 启动 Listener 服务...${NC}"
+    echo -e "${GREEN}🚀 启动 Stake Listener 服务...${NC}"
     # 捕获所有输出，只显示脚本的控制信息，过滤掉所有服务日志
     bash "$PROJECT_DIR/start/start_all.sh" start_listener 2>&1 | grep -vE '^\[|^\[[0-9]+\]\[t|^tail:|CryptographyDeprecationWarning|listener_tdlib\.py:|^[[:space:]]*$' || true
+    echo ""
+    read -p "按回车键继续..."
+}
+
+# 仅启动 Winna Listener
+start_winna_listener_only() {
+    echo -e "${GREEN}🚀 启动 Winna Listener 服务...${NC}"
+    # 捕获所有输出，只显示脚本的控制信息，过滤掉所有服务日志
+    bash "$PROJECT_DIR/start/start_all.sh" start_winna_listener 2>&1 | grep -vE '^\[|^\[[0-9]+\]\[t|^tail:|CryptographyDeprecationWarning|listener_winna\.py:|^[[:space:]]*$' || true
     echo ""
     read -p "按回车键继续..."
 }
@@ -87,10 +110,18 @@ stop_django_only() {
     read -p "按回车键继续..."
 }
 
-# 仅停止 Listener
+# 仅停止 Stake Listener
 stop_listener_only() {
-    echo -e "${RED}🛑 停止 Listener 服务...${NC}"
+    echo -e "${RED}🛑 停止 Stake Listener 服务...${NC}"
     bash "$PROJECT_DIR/start/start_all.sh" stop_listener
+    echo ""
+    read -p "按回车键继续..."
+}
+
+# 仅停止 Winna Listener
+stop_winna_listener_only() {
+    echo -e "${RED}🛑 停止 Winna Listener 服务...${NC}"
+    bash "$PROJECT_DIR/start/start_all.sh" stop_winna_listener
     echo ""
     read -p "按回车键继续..."
 }
@@ -137,9 +168,9 @@ view_django_log() {
     fi
 }
 
-# 查看 Listener 日志
+# 查看 Stake Listener 日志
 view_listener_log() {
-    echo -e "${YELLOW}📋 查看 Listener 日志 (按 q 退出，不会中断服务)...${NC}"
+    echo -e "${YELLOW}📋 查看 Stake Listener 日志 (按 q 退出，不会中断服务)...${NC}"
     echo ""
     LISTENER_LOG="$PROJECT_DIR/db/logs/listener/listener_tdlib.log"
     if [ ! -f "$LISTENER_LOG" ]; then
@@ -169,6 +200,36 @@ view_listener_log() {
         wait $TAIL_PID 2>/dev/null
     else
         echo -e "${RED}⚠️  日志文件不存在: $LISTENER_LOG${NC}"
+        read -p "按回车键继续..."
+    fi
+}
+
+# 查看 Winna Listener 日志
+view_winna_listener_log() {
+    echo -e "${YELLOW}📋 查看 Winna Listener 日志 (按 q 退出，不会中断服务)...${NC}"
+    echo ""
+    WINNA_LISTENER_LOG="$PROJECT_DIR/db/logs/listener/listener_winna.log"
+    if [ -f "$WINNA_LISTENER_LOG" ]; then
+        # 使用 tail -f 在后台运行，按 q 退出时只杀死 tail 进程，不会影响 listener
+        tail -f "$WINNA_LISTENER_LOG" &
+        TAIL_PID=$!
+        # 保存当前终端设置
+        OLD_STTY=$(stty -g)
+        stty -echo -icanon min 1 time 0
+        # 等待用户按 q
+        while true; do
+            key=$(dd bs=1 count=1 2>/dev/null)
+            if [ "$key" = "q" ] || [ "$key" = "Q" ]; then
+                break
+            fi
+        done
+        # 恢复终端设置
+        stty "$OLD_STTY"
+        # 只杀死 tail 进程，不会影响 listener
+        kill $TAIL_PID 2>/dev/null
+        wait $TAIL_PID 2>/dev/null
+    else
+        echo -e "${RED}⚠️  日志文件不存在: $WINNA_LISTENER_LOG${NC}"
         read -p "按回车键继续..."
     fi
 }
@@ -287,6 +348,19 @@ realtime_time_compare() {
     fi
 }
 
+# 查看连接的客户端列表
+view_connected_clients() {
+    echo -e "${BLUE}📋 查看连接的客户端列表...${NC}"
+    echo ""
+    VENV_ACTIVATE="$PROJECT_DIR/venv/bin/activate"
+    if [ -f "$VENV_ACTIVATE" ]; then
+        source "$VENV_ACTIVATE"
+    fi
+    python3 "$PROJECT_DIR/start/查询连接客户端.py"
+    echo ""
+    read -p "按回车键继续..."
+}
+
 # 主循环
 while true; do
     show_menu
@@ -301,6 +375,9 @@ while true; do
         1b)
             start_listener_only
             ;;
+        1w)
+            start_winna_listener_only
+            ;;
         2)
             stop_services
             ;;
@@ -309,6 +386,9 @@ while true; do
             ;;
         2b)
             stop_listener_only
+            ;;
+        2w)
+            stop_winna_listener_only
             ;;
         3)
             restart_services
@@ -321,6 +401,9 @@ while true; do
             ;;
         6)
             view_listener_log
+            ;;
+        6w)
+            view_winna_listener_log
             ;;
         7)
             view_bypass_log
@@ -342,6 +425,9 @@ while true; do
             ;;
         13)
             realtime_time_compare
+            ;;
+        14)
+            view_connected_clients
             ;;
         0)
             echo -e "${GREEN}👋 再见！${NC}"

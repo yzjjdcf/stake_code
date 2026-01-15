@@ -43,7 +43,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'serverbot.apps.ServerbotConfig',  # Stake 业务
-    'otherbot.apps.OtherbotConfig',    # 其他网站业务（完全隔离）
+    'winna.apps.WinnaConfig',          # Winna 业务（完全隔离）
 ]
 
 # 默认主键字段类型（Django 3.2+ 要求）
