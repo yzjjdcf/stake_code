@@ -7,13 +7,12 @@
 // @match        https://winna.com/*
 // @grant        none
 // @connect      *
+// @updateURL    https://stakefav.xyz/scripts/winna.user.js
+// @downloadURL  https://stakefav.xyz/scripts/winna.user.js
 // ==/UserScript==
 
 (function() {
     'use strict';
-
-    // ==================== 版本信息 ====================
-    // 注意：版本号现在在需要的地方直接获取（使用局部变量），避免混淆工具破坏全局变量引用
 
     // ==================== 配置 ====================
     // 注意：HTTPS 页面必须使用 wss:// (加密 WebSocket)，不能使用 ws://
@@ -32,6 +31,8 @@
     let isConnecting = false;
     let lastPingTime = null;  // 记录最后一次发送 ping 的时间戳
     let statusElement = null;
+    let certWindow = null;  // 保存打开的证书窗口引用，用于自动关闭
+    let certWindowOpened = false;  // 标记是否已经打开过证书页面，避免重复打开
     let serverTimeOffset = 0;  // 服务器时间偏移量（服务器时间 - 客户端时间，毫秒）
 
     // ==================== UI 状态显示（终端风格）====================
@@ -128,7 +129,6 @@
                 border-color: transparent transparent #b0b0b5 transparent;
             }
             .header-title { font-size: 10px; font-weight: 700; color: #b0b0b5; text-transform: uppercase; letter-spacing: 1px; }
-            .header-title .header-version { font-size: 9px; font-weight: 600; color: #8a8d92 !important; margin-left: 8px; text-transform: none !important; letter-spacing: 0.5px; opacity: 1 !important; display: inline !important; visibility: visible !important; }
 
             .status-dot {
                 width: 8px; height: 8px; background: #ff3b30; border-radius: 50%;
@@ -320,37 +320,36 @@
         statusElement = document.createElement('div');
         statusElement.id = 'winna-ws-panel';
         statusElement.className = 'collapsed';
-        // 直接使用 GM_info.script.version 获取版本号（混淆安全）
-        var versionStr = 'v' + (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version ? GM_info.script.version : '1.0.0');
-        statusElement.innerHTML = 
-            '<div id="winna-ws-header" title="拖动移动位置">' +
-                '<span class="header-title">Winna Auto Claim<span class="header-version">' + versionStr + '</span></span>' +
-                '<div style="display: flex; align-items: center; gap: 8px;">' +
-                    '<div class="status-dot" id="winna-ws-status-dot"></div>' +
-                    '<div id="winna-ws-close-btn" title="收起">×</div>' +
-                '</div>' +
-            '</div>' +
-            '<div id="winna-ws-username">' +
-                '<span class="username-label">user:</span>' +
-                '<span class="username-value" id="winna-ws-username-value">-</span>' +
-            '</div>' +
-            '<div id="winna-ws-ping-vault-container">' +
-                '<div id="winna-ws-vault-switch">' +
-                    '<span class="switch-label">存入保险库</span>' +
-                    '<div class="switch-checkbox" id="winna-ws-vault-checkbox"></div>' +
-                '</div>' +
-                '<div id="winna-ws-ping">' +
-                    '<span class="ping-label">ping:</span>' +
-                    '<span class="ping-value" id="winna-ws-ping-value">-</span>' +
-                '</div>' +
-            '</div>' +
-            '<div id="winna-ws-test-vault-btn">测试存入 1 USDT</div>' +
-            '<div id="winna-ws-test-buttons">' +
-                '<button id="winna-ws-test-turnstile-btn">测试获取 Turnstile Token</button>' +
-                '<button id="winna-ws-test-claim-btn">测试领取接口 (pinex6)</button>' +
-            '</div>' +
-            '<div id="winna-ws-log-container"></div>' +
-            '<div id="winna-ws-resize-handle" title="拖动等比缩放"></div>';
+        statusElement.innerHTML = `
+            <div id="winna-ws-header" title="拖动移动位置">
+                <span class="header-title">Winna Auto Claim</span>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <div class="status-dot" id="winna-ws-status-dot"></div>
+                    <div id="winna-ws-close-btn" title="收起">×</div>
+                </div>
+            </div>
+            <div id="winna-ws-username">
+                <span class="username-label">user:</span>
+                <span class="username-value" id="winna-ws-username-value">-</span>
+            </div>
+            <div id="winna-ws-ping-vault-container">
+                <div id="winna-ws-vault-switch">
+                    <span class="switch-label">存入保险库</span>
+                    <div class="switch-checkbox" id="winna-ws-vault-checkbox"></div>
+                </div>
+                <div id="winna-ws-ping">
+                    <span class="ping-label">ping:</span>
+                    <span class="ping-value" id="winna-ws-ping-value">-</span>
+                </div>
+            </div>
+            <div id="winna-ws-test-vault-btn">测试存入 1 USDT</div>
+            <div id="winna-ws-test-buttons">
+                <button id="winna-ws-test-turnstile-btn">测试获取 Turnstile Token</button>
+                <button id="winna-ws-test-claim-btn">测试领取接口 (pinex6)</button>
+            </div>
+            <div id="winna-ws-log-container"></div>
+            <div id="winna-ws-resize-handle" title="拖动等比缩放"></div>
+        `;
         document.body.appendChild(statusElement);
 
         logContainer = document.getElementById('winna-ws-log-container');
@@ -884,6 +883,24 @@
                         console.error('[Winna WS] 发送初始化消息失败:', e);
                     }
                 }
+                
+                // 连接成功后，尝试关闭证书信任页面
+                if (certWindow && !certWindow.closed) {
+                    try {
+                        certWindow.close();
+                        console.log('[Winna WS] ✅ 证书已信任，已自动关闭证书页面');
+                        certWindow = null;
+                        certWindowOpened = false;  // 重置标志，允许下次重新打开
+                    } catch (e) {
+                        // 如果无法关闭（可能是跨域限制），提示用户手动关闭
+                        console.log('[Winna WS] ✅ 证书已信任，请手动关闭证书页面');
+                        certWindow = null;
+                        certWindowOpened = false;  // 重置标志
+                    }
+                } else if (certWindowOpened) {
+                    // 证书页面已关闭，重置标志
+                    certWindowOpened = false;
+                }
             };
 
             ws.onmessage = function(event) {
@@ -896,8 +913,85 @@
             };
 
             ws.onerror = function(error) {
-                // 简化错误处理，只记录基本日志，不触发任何操作
-                console.log('[Winna WS] 连接错误，将自动重连');
+                const stateNames = {0: 'CONNECTING', 1: 'OPEN', 2: 'CLOSING', 3: 'CLOSED'};
+                console.error('[Winna WS] 连接错误:', error);
+                console.error('[Winna WS] WebSocket 状态:', ws.readyState, `(${stateNames[ws.readyState]})`);
+                console.error('[Winna WS] 连接 URL:', WEBSOCKET_URL);
+                console.error('[Winna WS] 错误详情:', {
+                    type: error.type,
+                    target: error.target,
+                    timeStamp: error.timeStamp,
+                    isTrusted: error.isTrusted
+                });
+                
+                // 尝试获取更详细的错误信息
+                if (ws.readyState === 3) { // CLOSED
+                    console.error('[Winna WS] 连接已关闭，可能的原因：');
+                    console.error('  1. SSL 证书问题（自签名证书需要浏览器接受）');
+                    console.error('  2. 服务器未启动或端口未开放');
+                    console.error('  3. 防火墙阻止连接');
+                    console.error('  4. 证书中的 IP 地址不匹配');
+                    
+                    // 检测是否为证书问题（通常是 SSL/TLS 错误）
+                    const isCertError = error.type === 'error' || 
+                                       (error.target && error.target.readyState === 3);
+                    
+                    if (isCertError) {
+                        // 检查是否已经打开过证书页面，避免重复打开
+                        const isCertWindowOpen = certWindow && !certWindow.closed;
+                        
+                        if (!certWindowOpened && !isCertWindowOpen) {
+                            // 从 WEBSOCKET_URL 提取服务器地址（wss://host:port -> https://host:port）
+                            const urlMatch = WEBSOCKET_URL.match(/wss?:\/\/([^:]+)(?::(\d+))?/);
+                            if (urlMatch) {
+                                const host = urlMatch[1];
+                                const port = urlMatch[2] || '8766';  // Winna 使用端口 8766
+                                const certUrl = `https://${host}:${port}/`;
+                                
+                                console.error('[Winna WS] 💡 检测到 SSL 证书问题，正在打开证书信任页面...');
+                                console.log('[Winna WS] ⚠️ SSL 证书未信任，正在打开证书页面...');
+                                
+                                // 标记已打开证书页面
+                                certWindowOpened = true;
+                                
+                                // 延迟打开证书页面，给用户时间看到提示
+                                setTimeout(() => {
+                                    // 在新标签页打开证书页面，让用户手动信任证书
+                                    // 保存窗口引用，以便连接成功后自动关闭
+                                    certWindow = window.open(certUrl, '_blank');
+                                    
+                                    // 显示详细提示（只在 console 中显示）
+                                    console.log('[Winna WS] 📋 请在打开的页面中：');
+                                    console.log('[Winna WS]    1. 点击"高级"或"Advanced"');
+                                    console.log('[Winna WS]    2. 点击"继续访问"或"Proceed"');
+                                    console.log('[Winna WS]    3. 信任证书后，页面会自动关闭');
+                                    
+                                    // 5秒后自动重连
+                                    setTimeout(() => {
+                                        console.log('[Winna WS] 🔄 5秒后自动重连...');
+                                        setTimeout(() => {
+                                            connect();
+                                        }, 5000);
+                                    }, 2000);
+                                }, 1000);
+                            } else {
+                                console.error('[Winna WS] 💡 建议：在浏览器中访问服务器地址并接受证书');
+                                console.error('[Winna WS] 连接错误: SSL 证书或网络问题');
+                            }
+                        } else if (isCertWindowOpen) {
+                            // 证书页面已打开，只提示用户操作，不重复打开
+                            console.log('[Winna WS] ⚠️ 证书页面已打开，请完成证书信任操作');
+                        } else {
+                            // 证书页面已关闭但连接仍失败，可能是其他问题
+                            console.log('[Winna WS] ⚠️ 证书已信任但连接仍失败，可能是服务器问题');
+                        }
+                    } else {
+                        console.error('[Winna WS] 连接错误: SSL 证书或网络问题');
+                    }
+                } else {
+                    console.error('[Winna WS] WebSocket 连接错误');
+                }
+                
                 updateConnectionStatus('error');
                 isConnecting = false;
             };
@@ -933,13 +1027,11 @@
                 // 如果是 SSL/TLS 相关错误
                 if (event.code === 1015 || event.code === 1006) {
                     // 从 WEBSOCKET_URL 提取服务器地址
-                    // 如果使用 Nginx 反向代理，不需要端口号（使用默认 443）
                     const urlMatch = WEBSOCKET_URL.match(/wss?:\/\/([^:]+)(?::(\d+))?/);
                     if (urlMatch) {
                         const host = urlMatch[1];
-                        const port = urlMatch[2];
-                        // 如果没有端口号，使用默认 HTTPS 端口（443），不添加端口号
-                        const certUrl = port ? `https://${host}:${port}/` : `https://${host}/`;
+                        const port = urlMatch[2] || '8766';  // Winna 使用端口 8766
+                        const certUrl = `https://${host}:${port}/`;
                         console.error(`💡 这可能是 SSL 证书问题，请在浏览器中访问 ${certUrl} 并接受证书`);
                     } else {
                         console.error('💡 这可能是 SSL 证书问题，请在浏览器中访问服务器地址并接受证书');

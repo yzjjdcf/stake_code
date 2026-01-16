@@ -52,10 +52,12 @@ show_menu() {
     echo -e "${BLUE}12)${NC} 校准服务器时间"
     echo -e "${BLUE}13)${NC} 实时时间对比（每秒更新）"
     echo -e "${BLUE}14)${NC} 查看连接的客户端列表（Stake + Winna）"
+    echo -e "${BLUE}15)${NC} 更新脚本文件到服务器（从 scripts/ 复制到 /var/www/stake_code/scripts/）"
+    echo -e "${BLUE}16)${NC} 启动高额投注监听（chat_cn.py）"
     echo ""
     echo -e "${RED}0)${NC} 退出"
     echo ""
-    echo -n "请选择 [0-14, 1a-2b, 1w-2w, 6w]: "
+    echo -n "请选择 [0-16, 1a-2b, 1w-2w, 6w]: "
 }
 
 # 启动所有服务
@@ -361,6 +363,138 @@ view_connected_clients() {
     read -p "按回车键继续..."
 }
 
+# 启动高额投注监听
+start_chat_cn() {
+    echo -e "${BLUE}🎰 启动高额投注监听（chat_cn.py）...${NC}"
+    echo ""
+    
+    CHAT_CN_SCRIPT="$PROJECT_DIR/start/chat_cn.py"
+    
+    if [ ! -f "$CHAT_CN_SCRIPT" ]; then
+        echo -e "${RED}❌ 脚本不存在: $CHAT_CN_SCRIPT${NC}"
+        echo ""
+        read -p "按回车键继续..."
+        return
+    fi
+    
+    # 检查是否已经运行
+    if pgrep -f "chat_cn.py" > /dev/null; then
+        echo -e "${YELLOW}⚠️  chat_cn.py 已经在运行中${NC}"
+        echo -e "${YELLOW}进程信息:${NC}"
+        ps aux | grep "chat_cn.py" | grep -v grep
+        echo ""
+        read -p "按回车键继续..."
+        return
+    fi
+    
+    echo -e "${GREEN}正在启动...${NC}"
+    echo -e "${YELLOW}提示：按 Ctrl+C 可以停止监听${NC}"
+    echo ""
+    
+    # 运行脚本（前台运行，方便查看输出）
+    cd "$PROJECT_DIR/start" || exit 1
+    python3 chat_cn.py
+    
+    echo ""
+    read -p "按回车键继续..."
+}
+
+# 更新脚本文件到服务器
+update_scripts() {
+    echo -e "${BLUE}📦 更新脚本文件到服务器...${NC}"
+    echo ""
+    
+    SOURCE_DIR="$PROJECT_DIR/scripts"
+    TARGET_DIR="/var/www/stake_code/scripts"
+    
+    # 检查源目录是否存在
+    if [ ! -d "$SOURCE_DIR" ]; then
+        echo -e "${RED}❌ 源目录不存在: $SOURCE_DIR${NC}"
+        echo -e "${YELLOW}提示：请先创建 scripts 目录并放入脚本文件${NC}"
+        echo ""
+        read -p "按回车键继续..."
+        return
+    fi
+    
+    # 检查源目录是否为空
+    if [ -z "$(ls -A $SOURCE_DIR 2>/dev/null)" ]; then
+        echo -e "${YELLOW}⚠️  源目录为空: $SOURCE_DIR${NC}"
+        echo -e "${YELLOW}提示：请先放入脚本文件${NC}"
+        echo ""
+        read -p "按回车键继续..."
+        return
+    fi
+    
+    # 显示源目录内容
+    echo -e "${GREEN}源目录: $SOURCE_DIR${NC}"
+    echo -e "${GREEN}文件列表:${NC}"
+    ls -lh "$SOURCE_DIR" | tail -n +2 | awk '{print "  " $9 " (" $5 ")"}'
+    echo ""
+    
+    # 创建目标目录（如果不存在）
+    echo -e "${YELLOW}创建目标目录...${NC}"
+    sudo mkdir -p "$TARGET_DIR"
+    
+    # 检测 Nginx 用户
+    NGINX_USER=$(ps aux | grep -E "nginx.*master" | grep -v grep | awk '{print $1}' | head -1)
+    if [ -z "$NGINX_USER" ]; then
+        NGINX_USER="www-data"  # 默认 Nginx 用户
+    fi
+    echo -e "${GREEN}检测到 Nginx 用户: $NGINX_USER${NC}"
+    echo ""
+    
+    # 复制所有文件
+    echo -e "${YELLOW}复制文件...${NC}"
+    sudo cp -r "$SOURCE_DIR"/* "$TARGET_DIR/" 2>&1
+    
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}✅ 文件复制成功${NC}"
+    else
+        echo -e "${RED}❌ 文件复制失败${NC}"
+        echo ""
+        read -p "按回车键继续..."
+        return
+    fi
+    
+    # 设置权限
+    echo -e "${YELLOW}设置文件权限...${NC}"
+    sudo chown -R $NGINX_USER:$NGINX_USER "$TARGET_DIR"
+    sudo chmod 755 "$TARGET_DIR"
+    sudo find "$TARGET_DIR" -type f -exec chmod 644 {} \;
+    sudo find "$TARGET_DIR" -type d -exec chmod 755 {} \;
+    echo -e "${GREEN}✅ 权限已设置${NC}"
+    echo ""
+    
+    # 显示目标目录内容
+    echo -e "${GREEN}目标目录: $TARGET_DIR${NC}"
+    echo -e "${GREEN}已复制的文件:${NC}"
+    ls -lh "$TARGET_DIR" | tail -n +2 | awk '{print "  " $9 " (" $5 ")"}'
+    echo ""
+    
+    # 测试访问（如果可能）
+    DOMAIN=$(grep "server_name" /etc/nginx/sites-available/websocket 2>/dev/null | head -1 | awk '{print $2}' | tr -d ';' || echo "")
+    if [ -n "$DOMAIN" ] && command -v curl &> /dev/null; then
+        echo -e "${YELLOW}测试脚本访问...${NC}"
+        # 测试第一个 .js 文件
+        FIRST_JS=$(find "$TARGET_DIR" -name "*.js" -type f | head -1)
+        if [ -n "$FIRST_JS" ]; then
+            JS_NAME=$(basename "$FIRST_JS")
+            TEST_URL="https://$DOMAIN/scripts/$JS_NAME"
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$TEST_URL" 2>/dev/null || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+                echo -e "${GREEN}✅ 脚本可访问: $TEST_URL (HTTP $HTTP_CODE)${NC}"
+            else
+                echo -e "${YELLOW}⚠️  脚本访问测试失败: $TEST_URL (HTTP $HTTP_CODE)${NC}"
+            fi
+        fi
+    fi
+    
+    echo ""
+    echo -e "${GREEN}✅ 更新完成！${NC}"
+    echo ""
+    read -p "按回车键继续..."
+}
+
 # 主循环
 while true; do
     show_menu
@@ -428,6 +562,12 @@ while true; do
             ;;
         14)
             view_connected_clients
+            ;;
+        15)
+            update_scripts
+            ;;
+        16)
+            start_chat_cn
             ;;
         0)
             echo -e "${GREEN}👋 再见！${NC}"

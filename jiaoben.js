@@ -31,11 +31,19 @@
 (function() {
     'use strict';
 
+    // ==================== 版本信息 ====================
+    // 注意：版本号现在在需要的地方直接获取（使用局部变量），避免混淆工具破坏全局变量引用
+
     // ==================== 配置 ====================
     // 注意：HTTPS 页面必须使用 wss:// (加密 WebSocket)，不能使用 ws://
     const WEBSOCKET_URL = 'wss://stakefav.xyz';  // 使用域名（通过 nginx 反向代理）
-    const RECONNECT_DELAY = 3000;  // 重连延迟（毫秒）
+    const RECONNECT_DELAY = 5000;  // 重连延迟（毫秒）
     const MAX_RECONNECT_ATTEMPTS = 10;  // 最大重连次数
+    
+    // ==================== 调试模式开关 ====================
+    // true: debug 模式，打印所有日志
+    // false: release 模式，只打印 WebSocket 传输相关日志
+    const DEBUG_MODE = false;  // 修改此值切换模式
     
     // ==================== 动态域名获取 ====================
     /**
@@ -66,41 +74,43 @@
     // 用户唯一标识符（用于区分不同使用者，一个用户可以有多个 Stake 账号）
     // 注意：为每个用户生成脚本时，需要修改此值
     const USER_ID = 'KK';  // 请修改为实际的用户标识符
-
-    // ==================== CSP 错误处理 ====================
-    // 监听全局错误事件，捕获和处理 CSP 违规
-    window.addEventListener('error', function(event) {
-        const errorMsg = event.message || '';
-        // 过滤 CSP 相关错误（记录警告以便调试，但不阻止功能）
-        if (errorMsg.includes('Content Security Policy') || 
-            errorMsg.includes('CSP') || 
-            errorMsg.includes('Refused to') ||
-            event.filename?.includes('challenges.cloudflare.com')) {
-            console.warn('[Stake WS] CSP 违规被捕获:', errorMsg, event.filename || '');
-            // 不阻止事件，让代码的 try-catch 处理
-        }
-        // 过滤 Cloudflare PAT 相关错误
-        if (errorMsg.includes('challenge-platform') && 
-            (errorMsg.includes('401') || errorMsg.includes('Failed to load'))) {
-            // 静默忽略 Cloudflare PAT 401 错误
-            event.preventDefault();
-            return false;
-        }
-    }, true);
     
-    // 监听未处理的 Promise 拒绝，处理 CSP 相关的 Promise 拒绝
-    window.addEventListener('unhandledrejection', function(event) {
-        const reason = event.reason?.message || event.reason?.toString() || '';
-        // 处理 CSP 相关的 Promise 拒绝
-        if (reason.includes('CSP') || reason.includes('Content Security Policy') || reason.includes('SecurityError')) {
-            console.warn('[Stake WS] CSP 相关的 Promise 拒绝:', reason);
-            event.preventDefault(); // 阻止默认错误处理
+    // ==================== 日志函数 ====================
+    // WebSocket 相关日志（release 模式下也打印）
+    function wsLog(...args) {
+        console.log('[Stake WS]', ...args);
+    }
+    
+    // WebSocket 相关警告（release 模式下也打印）
+    function wsWarn(...args) {
+        console.warn('[Stake WS]', ...args);
+    }
+    
+    // WebSocket 相关错误（release 模式下也打印）
+    function wsError(...args) {
+        console.error('[Stake WS]', ...args);
+    }
+    
+    // 通用日志（只在 debug 模式下打印）
+    function debugLog(...args) {
+        if (DEBUG_MODE) {
+            console.log(...args);
         }
-        // 处理 Cloudflare PAT 相关的 Promise 拒绝
-        if (reason.includes('challenge-platform') && reason.includes('401')) {
-            event.preventDefault(); // 阻止默认错误处理
+    }
+    
+    // 通用警告（只在 debug 模式下打印）
+    function debugWarn(...args) {
+        if (DEBUG_MODE) {
+            console.warn(...args);
         }
-    });
+    }
+    
+    // 通用错误（只在 debug 模式下打印）
+    function debugError(...args) {
+        if (DEBUG_MODE) {
+            console.error(...args);
+        }
+    }
 
     // ==================== 状态管理 ====================
     let ws = null;
@@ -108,9 +118,8 @@
     let isConnecting = false;
     let lastPingTime = null;  // 记录最后一次发送 ping 的时间戳
     let statusElement = null;
-    let certWindow = null;  // 保存打开的证书窗口引用，用于自动关闭
-    let certWindowOpened = false;  // 标记是否已经打开过证书页面，避免重复打开
     let serverTimeOffset = 0;  // 服务器时间偏移量（服务器时间 - 客户端时间，毫秒）
+    let sessionCache = null;  // session 缓存（只获取一次，和登录绑定，不变）
 
     // ==================== UI 状态显示（终端风格）====================
     let logContainer = null;
@@ -205,6 +214,7 @@
                 border-color: transparent transparent #b0b0b5 transparent;
             }
             .header-title { font-size: 10px; font-weight: 700; color: #b0b0b5; text-transform: uppercase; letter-spacing: 1px; }
+            .header-title .header-version { font-size: 9px; font-weight: 600; color: #8a8d92 !important; margin-left: 8px; text-transform: none !important; letter-spacing: 0.5px; opacity: 0.9; display: inline-block; }
 
             .status-dot {
                 width: 8px; height: 8px; background: #ff3b30; border-radius: 50%;
@@ -360,77 +370,60 @@
         `;
         document.head.appendChild(style);
 
-        // 创建面板（使用更安全的方式避免 CSP 违规）
+        // 创建面板
         statusElement = document.createElement('div');
         statusElement.id = 'stake-ws-panel';
         statusElement.className = 'collapsed';
         
-        // 尝试使用 innerHTML，如果被 CSP 阻止则使用 createElement
-        try {
-            statusElement.innerHTML = `
-                <div id="stake-ws-header" title="拖动移动位置">
-                    <span class="header-title">Stake Auto Claim</span>
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <div class="status-dot" id="stake-ws-status-dot"></div>
-                        <div id="stake-ws-close-btn" title="收起">×</div>
-                    </div>
-                </div>
-                <div id="stake-ws-username">
-                    <span class="username-label">user:</span>
-                    <span class="username-value" id="stake-ws-username-value">-</span>
-                </div>
-                <div id="stake-ws-ping-vault-container">
-                    <div id="stake-ws-vault-switch">
-                        <span class="switch-label">存入保险库</span>
-                        <div class="switch-checkbox" id="stake-ws-vault-checkbox"></div>
-                    </div>
-                    <div id="stake-ws-ping">
-                        <span class="ping-label">ping:</span>
-                        <span class="ping-value" id="stake-ws-ping-value">-</span>
-                    </div>
-                </div>
-                <div id="stake-ws-test-vault-btn">测试存入 1 USDT</div>
-                <div id="stake-ws-log-container"></div>
-                <div id="stake-ws-resize-handle" title="拖动等比缩放"></div>
-            `;
-        } catch (e) {
-            // 如果 innerHTML 被 CSP 阻止，使用 createElement 创建 DOM
-            if (e.name === 'SecurityError' || e.message?.includes('CSP')) {
-                console.warn('[Stake WS] ⚠️ CSP 阻止了 innerHTML，使用 createElement 创建 UI');
-                const header = document.createElement('div');
-                header.id = 'stake-ws-header';
-                header.title = '拖动移动位置';
-                header.innerHTML = '<span class="header-title">Stake Auto Claim</span><div style="display: flex; align-items: center; gap: 8px;"><div class="status-dot" id="stake-ws-status-dot"></div><div id="stake-ws-close-btn" title="收起">×</div></div>';
-                statusElement.appendChild(header);
-                
-                const username = document.createElement('div');
-                username.id = 'stake-ws-username';
-                username.innerHTML = '<span class="username-label">user:</span><span class="username-value" id="stake-ws-username-value">-</span>';
-                statusElement.appendChild(username);
-                
-                const pingVaultContainer = document.createElement('div');
-                pingVaultContainer.id = 'stake-ws-ping-vault-container';
-                pingVaultContainer.innerHTML = '<div id="stake-ws-vault-switch"><span class="switch-label">存入保险库</span><div class="switch-checkbox" id="stake-ws-vault-checkbox"></div></div><div id="stake-ws-ping"><span class="ping-label">ping:</span><span class="ping-value" id="stake-ws-ping-value">-</span></div>';
-                statusElement.appendChild(pingVaultContainer);
-                
-                const testVaultBtn = document.createElement('div');
-                testVaultBtn.id = 'stake-ws-test-vault-btn';
-                testVaultBtn.textContent = '测试存入 1 USDT';
-                statusElement.appendChild(testVaultBtn);
-                
-                const logContainer = document.createElement('div');
-                logContainer.id = 'stake-ws-log-container';
-                statusElement.appendChild(logContainer);
-                
-                const resizeHandle = document.createElement('div');
-                resizeHandle.id = 'stake-ws-resize-handle';
-                resizeHandle.title = '拖动等比缩放';
-                statusElement.appendChild(resizeHandle);
-            } else {
-                throw e;
-            }
+        // 直接使用 GM_info.script.version 获取版本号（混淆安全）
+        var versionStr = 'v' + (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version ? GM_info.script.version : '1.0.0');
+        statusElement.innerHTML = 
+            '<div id="stake-ws-header" title="拖动移动位置">' +
+                '<span class="header-title">Stake Auto Claim<span class="header-version">' + versionStr + '</span></span>' +
+                '<div style="display: flex; align-items: center; gap: 8px;">' +
+                    '<div class="status-dot" id="stake-ws-status-dot"></div>' +
+                    '<div id="stake-ws-close-btn" title="收起">×</div>' +
+                '</div>' +
+            '</div>' +
+            '<div id="stake-ws-username">' +
+                '<span class="username-label">user:</span>' +
+                '<span class="username-value" id="stake-ws-username-value">-</span>' +
+            '</div>' +
+            '<div id="stake-ws-ping-vault-container">' +
+                '<div id="stake-ws-vault-switch">' +
+                    '<span class="switch-label">存入保险库</span>' +
+                    '<div class="switch-checkbox" id="stake-ws-vault-checkbox"></div>' +
+                '</div>' +
+                '<div id="stake-ws-ping">' +
+                    '<span class="ping-label">ping:</span>' +
+                    '<span class="ping-value" id="stake-ws-ping-value">-</span>' +
+                '</div>' +
+            '</div>' +
+            '<div id="stake-ws-test-vault-btn">测试存入 1 USDT</div>' +
+            '<div id="stake-ws-log-container"></div>' +
+            '<div id="stake-ws-resize-handle" title="拖动等比缩放"></div>';
+        
+        // 确保 document.body 存在后再添加元素
+        if (document.body) {
+            document.body.appendChild(statusElement);
+        } else {
+            wsError('❌ 无法添加 UI 元素：document.body 不存在，等待 body 准备好...');
+            // 等待 body 准备好
+            const checkBody = setInterval(function() {
+                if (document.body) {
+                    document.body.appendChild(statusElement);
+                    clearInterval(checkBody);
+                    wsLog('✅ UI 元素已添加到页面');
+                }
+            }, 100);
+            // 10秒后停止尝试
+            setTimeout(function() {
+                clearInterval(checkBody);
+                if (!document.body) {
+                    wsError('❌ 10秒后 document.body 仍不存在');
+                }
+            }, 10000);
         }
-        document.body.appendChild(statusElement);
 
         logContainer = document.getElementById('stake-ws-log-container');
         statusDot = document.getElementById('stake-ws-status-dot');
@@ -644,26 +637,7 @@
             formattedMessage = message.replace(codeMatch[0], `<span class="log-code">${codeMatch[0]}</span>`);
         }
         
-        // 使用更安全的方式设置内容，避免 CSP 违规
-        try {
-            logItem.innerHTML = `[${timeStr}] ${formattedMessage}`;
-        } catch (e) {
-            // 如果 innerHTML 被 CSP 阻止，使用 textContent 和 createElement
-            if (e.name === 'SecurityError' || e.message?.includes('CSP')) {
-                logItem.textContent = `[${timeStr}] ${formattedMessage.replace(/<[^>]*>/g, '')}`;
-                // 如果有代码高亮，尝试手动创建 span
-                const codeMatch = formattedMessage.match(/<span class="log-code">([^<]+)<\/span>/);
-                if (codeMatch) {
-                    logItem.textContent = `[${timeStr}] `;
-                    const codeSpan = document.createElement('span');
-                    codeSpan.className = 'log-code';
-                    codeSpan.textContent = codeMatch[1];
-                    logItem.appendChild(codeSpan);
-                }
-            } else {
-                throw e;
-            }
-        }
+        logItem.innerHTML = `[${timeStr}] ${formattedMessage}`;
         logContainer.appendChild(logItem);
         
         // 自动滚动到底部
@@ -792,7 +766,7 @@
             testBtn.textContent = '测试中...';
             
             try {
-                console.log('[Stake WS] 🧪 测试存入保险库: 1 USDT');
+                wsLog('🧪 测试存入保险库: 1 USDT');
                 addLog('🧪 测试存入保险库: 1 USDT', 'info');
                 
                 const result = await depositToVault(1, 'usdt');
@@ -800,14 +774,14 @@
                 if (result.success) {
                     const depositedAmount = result.data?.amount || '1';
                     addLog(`✅ 测试成功: 存入 ${depositedAmount} USDT`, 'success');
-                    console.log('[Stake WS] ✅ 测试存入保险库成功:', result.data);
+                    wsLog('✅ 测试存入保险库成功:', result.data);
                 } else {
                     addLog(`❌ 测试失败: ${result.error}`, 'error');
-                    console.error('[Stake WS] ❌ 测试存入保险库失败:', result.error);
+                    wsError('❌ 测试存入保险库失败:', result.error);
                 }
             } catch (e) {
                 addLog(`❌ 测试异常: ${e.message}`, 'error');
-                console.error('[Stake WS] ❌ 测试存入保险库异常:', e);
+                wsError('❌ 测试存入保险库异常:', e);
             } finally {
                 // 恢复按钮状态
                 testBtn.style.opacity = '1';
@@ -825,17 +799,17 @@
     // 存入保险库
     async function depositToVault(amount, currency) {
         try {
-            // 获取 token（使用与领取接口相同的方式）
-            const token = getStakeToken();
-            if (!token) {
-                console.error('[Stake WS] 无法获取 token，无法存入保险库');
-                return { success: false, error: '无法获取 token' };
+            // 获取 session
+            const session = getSession();
+            if (!session) {
+                wsError('无法获取 session，无法存入保险库');
+                return { success: false, error: '无法获取 session' };
             }
 
             // 处理金额：向下取整到2位小数
             const originalAmount = parseFloat(amount);
             if (isNaN(originalAmount) || originalAmount <= 0) {
-                console.error('[Stake WS] 无效的金额，无法存入保险库');
+                wsError('无效的金额，无法存入保险库');
                 return { success: false, error: '无效的金额' };
             }
 
@@ -844,11 +818,11 @@
             
             // 如果处理后的金额小于最小值（0.01），则不存入
             if (safeAmount < 0.01) {
-                console.warn(`[Stake WS] 金额太小（处理后: ${safeAmount}），跳过存入保险库`);
+                wsWarn(`金额太小（处理后: ${safeAmount}），跳过存入保险库`);
                 return { success: false, error: '金额太小，无法存入' };
             }
 
-            console.log(`[Stake WS] 金额处理: 原始=${originalAmount}, 向下取整=${safeAmount.toFixed(2)}`);
+            debugLog(`[Stake WS] 金额处理: 原始=${originalAmount}, 向下取整=${safeAmount.toFixed(2)}`);
 
             // 构建 GraphQL mutation
             const mutation = `mutation CreateVaultDeposit($currency: CurrencyEnum!, $amount: Float!) {
@@ -887,7 +861,7 @@
                     'content-type': 'application/json',
                     'origin': getCurrentOrigin(),
                     'referer': `${getCurrentOrigin()}/zh/settings/offers`,
-                    'x-access-token': token,
+                    'x-access-token': session,
                     'x-language': 'zh',
                     'x-operation-name': 'CreateVaultDeposit',
                     'x-operation-type': 'query'
@@ -901,15 +875,15 @@
             const responseData = await response.json();
 
             if (responseData.data && responseData.data.createVaultDeposit) {
-                console.log('[Stake WS] ✅ 存入保险库成功:', responseData.data.createVaultDeposit);
+                wsLog('✅ 存入保险库成功:', responseData.data.createVaultDeposit);
                 return { success: true, data: responseData.data.createVaultDeposit };
             } else {
                 const error = responseData.errors?.[0]?.message || '未知错误';
-                console.error('[Stake WS] ❌ 存入保险库失败:', error);
+                wsError('❌ 存入保险库失败:', error);
                 return { success: false, error: error };
             }
         } catch (e) {
-            console.error('[Stake WS] ❌ 存入保险库异常:', e);
+            wsError('❌ 存入保险库异常:', e);
             return { success: false, error: e.message };
         }
     }
@@ -921,50 +895,96 @@
             return;
         }
 
+        // 先获取 session 和用户名，如果 session 没获取到，不进行连接
+        const session = getSession();
+        const preUsername = getUsernameFromPage();
+        
+        if (!session) {
+            wsWarn('⚠️ 未获取到 session，无法建立 WebSocket 连接');
+            wsWarn('⚠️ 请确保已登录并刷新页面');
+            updateConnectionStatus('error');
+            addLog('❌ 未获取到 session，请确保已登录', 'error');
+            return;
+        }
+        
+        if (preUsername && isValidUsername(preUsername)) {
+            wsLog('已获取到用户名:', preUsername);
+        } else {
+            wsWarn('⚠️ 未获取到有效用户名，将在连接后继续尝试');
+        }
+
         isConnecting = true;
         updateConnectionStatus('connecting');
-        console.log('[Stake WS] 正在连接到服务器...');
+        wsLog('正在连接到服务器...');
 
         try {
             ws = new WebSocket(WEBSOCKET_URL);
 
             ws.onopen = function() {
-                console.log('[Stake WS] 连接成功');
+                wsLog('连接成功');
                 isConnecting = false;
                 reconnectAttempts = 0;
                 updateConnectionStatus('connected');
                 addLog('✅ 连接成功', 'success');
                 
-                // 连接成功后，发送初始化消息（包含 username）
-                const username = getUsernameFromPage();
-                if (ws.readyState === WebSocket.OPEN) {
+                // 如果连接前已经获取到用户名，立即发送
+                if (preUsername && isValidUsername(preUsername)) {
                     try {
                         ws.send(JSON.stringify({
                             type: 'init',
-                            username: username || '-',
+                            username: preUsername,
                             user_id: USER_ID
                         }));
+                        wsLog('已发送初始化消息，用户名:', preUsername);
                     } catch (e) {
-                        console.error('[Stake WS] 发送初始化消息失败:', e);
+                        wsError('发送初始化消息失败:', e);
                     }
-                }
-                
-                // 连接成功后，尝试关闭证书信任页面
-                if (certWindow && !certWindow.closed) {
-                    try {
-                        certWindow.close();
-                        console.log('[Stake WS] ✅ 证书已信任，已自动关闭证书页面');
-                        certWindow = null;
-                        certWindowOpened = false;  // 重置标志，允许下次重新打开
-                    } catch (e) {
-                        // 如果无法关闭（可能是跨域限制），提示用户手动关闭
-                        console.log('[Stake WS] ✅ 证书已信任，请手动关闭证书页面');
-                        certWindow = null;
-                        certWindowOpened = false;  // 重置标志
-                    }
-                } else if (certWindowOpened) {
-                    // 证书页面已关闭，重置标志
-                    certWindowOpened = false;
+                } else {
+                    // 如果连接前未获取到用户名，延迟发送初始化消息，等待页面完全加载后再获取
+                    // 延迟 2 秒，确保页面数据已加载完成
+                    setTimeout(function() {
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            // 多次尝试获取用户名（最多尝试 3 次，每次间隔 1 秒）
+                            let attempts = 0;
+                            const maxAttempts = 3;
+                            
+                            function trySendInit() {
+                                attempts++;
+                                const username = getUsernameFromPage();
+                                
+                                if (username && isValidUsername(username)) {
+                                    // 获取到有效用户名，立即发送
+                                    try {
+                                        ws.send(JSON.stringify({
+                                            type: 'init',
+                                            username: username,
+                                            user_id: USER_ID
+                                        }));
+                                        wsLog('已发送初始化消息，用户名:', username);
+                                    } catch (e) {
+                                        wsError('发送初始化消息失败:', e);
+                                    }
+                                } else if (attempts < maxAttempts) {
+                                    // 未获取到有效用户名，继续尝试
+                                    setTimeout(trySendInit, 1000);
+                                } else {
+                                    // 达到最大尝试次数，发送默认值
+                                    try {
+                                        ws.send(JSON.stringify({
+                                            type: 'init',
+                                            username: '-',
+                                            user_id: USER_ID
+                                        }));
+                                        wsLog('未能获取到有效用户名，已发送默认值');
+                                    } catch (e) {
+                                        wsError('发送初始化消息失败:', e);
+                                    }
+                                }
+                            }
+                            
+                            trySendInit();
+                        }
+                    }, 2000);  // 延迟 2 秒开始获取用户名
                 }
             };
 
@@ -973,99 +993,22 @@
                     const data = JSON.parse(event.data);
                     handleMessage(data);
                 } catch (e) {
-                    console.error('[Stake WS] 解析消息失败:', e);
+                    wsError('解析消息失败:', e);
                 }
             };
 
             ws.onerror = function(error) {
-                const stateNames = {0: 'CONNECTING', 1: 'OPEN', 2: 'CLOSING', 3: 'CLOSED'};
-                console.error('[Stake WS] 连接错误:', error);
-                console.error('[Stake WS] WebSocket 状态:', ws.readyState, `(${stateNames[ws.readyState]})`);
-                console.error('[Stake WS] 连接 URL:', WEBSOCKET_URL);
-                console.error('[Stake WS] 错误详情:', {
-                    type: error.type,
-                    target: error.target,
-                    timeStamp: error.timeStamp,
-                    isTrusted: error.isTrusted
-                });
-                
-                // 尝试获取更详细的错误信息
-                if (ws.readyState === 3) { // CLOSED
-                    console.error('[Stake WS] 连接已关闭，可能的原因：');
-                    console.error('  1. SSL 证书问题（自签名证书需要浏览器接受）');
-                    console.error('  2. 服务器未启动或端口未开放');
-                    console.error('  3. 防火墙阻止连接');
-                    console.error('  4. 证书中的 IP 地址不匹配');
-                    
-                    // 检测是否为证书问题（通常是 SSL/TLS 错误）
-                    const isCertError = error.type === 'error' || 
-                                       (error.target && error.target.readyState === 3);
-                    
-                    if (isCertError) {
-                        // 检查是否已经打开过证书页面，避免重复打开
-                        const isCertWindowOpen = certWindow && !certWindow.closed;
-                        
-                        if (!certWindowOpened && !isCertWindowOpen) {
-                            // 从 WEBSOCKET_URL 提取服务器地址（wss://host:port -> https://host:port）
-                            const urlMatch = WEBSOCKET_URL.match(/wss?:\/\/([^:]+)(?::(\d+))?/);
-                            if (urlMatch) {
-                                const host = urlMatch[1];
-                                const port = urlMatch[2] || '8765';
-                                const certUrl = `https://${host}:${port}/`;
-                                
-                                console.error('[Stake WS] 💡 检测到 SSL 证书问题，正在打开证书信任页面...');
-                                console.log('[Stake WS] ⚠️ SSL 证书未信任，正在打开证书页面...');
-                                
-                                // 标记已打开证书页面
-                                certWindowOpened = true;
-                                
-                                // 延迟打开证书页面，给用户时间看到提示
-                                setTimeout(() => {
-                                    // 在新标签页打开证书页面，让用户手动信任证书
-                                    // 保存窗口引用，以便连接成功后自动关闭
-                                    certWindow = window.open(certUrl, '_blank');
-                                    
-                                    // 显示详细提示（只在 console 中显示）
-                                    console.log('[Stake WS] 📋 请在打开的页面中：');
-                                    console.log('[Stake WS]    1. 点击"高级"或"Advanced"');
-                                    console.log('[Stake WS]    2. 点击"继续访问"或"Proceed"');
-                                    console.log('[Stake WS]    3. 信任证书后，页面会自动关闭');
-                                    
-                                    // 5秒后自动重连
-                                    setTimeout(() => {
-                                        console.log('[Stake WS] 🔄 5秒后自动重连...');
-                                        setTimeout(() => {
-                                            connect();
-                                        }, 5000);
-                                    }, 2000);
-                                }, 1000);
-                            } else {
-                                console.error('[Stake WS] 💡 建议：在浏览器中访问服务器地址并接受证书');
-                                console.error('[Stake WS] 连接错误: SSL 证书或网络问题');
-                            }
-                        } else if (isCertWindowOpen) {
-                            // 证书页面已打开，只提示用户操作，不重复打开
-                            console.log('[Stake WS] ⚠️ 证书页面已打开，请完成证书信任操作');
-                        } else {
-                            // 证书页面已关闭但连接仍失败，可能是其他问题
-                            console.log('[Stake WS] ⚠️ 证书已信任但连接仍失败，可能是服务器问题');
-                        }
-                    } else {
-                        console.error('[Stake WS] 连接错误: SSL 证书或网络问题');
-                    }
-                } else {
-                    console.error('[Stake WS] WebSocket 连接错误');
-                }
-                
+                // 简化错误处理，只记录基本日志，不触发任何操作
+                wsLog('连接错误，将自动重连');
                 updateConnectionStatus('error');
                 isConnecting = false;
             };
 
             ws.onclose = function(event) {
-                console.log('[Stake WS] 连接关闭');
-                console.log('[Stake WS] 关闭代码:', event.code);
-                console.log('[Stake WS] 关闭原因:', event.reason || '无原因');
-                console.log('[Stake WS] 是否正常关闭:', event.wasClean);
+                wsLog('连接关闭');
+                wsLog('关闭代码:', event.code);
+                wsLog('关闭原因:', event.reason || '无原因');
+                wsLog('是否正常关闭:', event.wasClean);
                 
                 // WebSocket 关闭代码说明
                 const closeCodeMessages = {
@@ -1086,45 +1029,49 @@
                 };
                 
                 if (closeCodeMessages[event.code]) {
-                    console.error('[Stake WS] 关闭代码说明:', closeCodeMessages[event.code]);
+                    wsError('关闭代码说明:', closeCodeMessages[event.code]);
                 }
                 
                 // 如果是 SSL/TLS 相关错误
                 if (event.code === 1015 || event.code === 1006) {
-                    console.error('💡 这可能是 SSL 证书问题，请在浏览器中访问 https://146.103.42.142:8765/ 并接受证书');
-                    console.error('💡 或者检查服务器端日志，确认 WebSocket 服务器是否正常启动');
+                    // 从 WEBSOCKET_URL 提取域名
+                    const urlMatch = WEBSOCKET_URL.match(/wss?:\/\/([^:]+)/);
+                    const host = urlMatch ? urlMatch[1] : 'stakefav.xyz';
+                    wsError(`💡 这可能是 SSL 证书问题，请检查服务器端 SSL 证书配置`);
+                    wsError(`💡 WebSocket 地址: ${WEBSOCKET_URL}`);
+                    wsError('💡 或者检查服务器端日志，确认 WebSocket 服务器是否正常启动');
                 }
                 
                 isConnecting = false;
                 updateConnectionStatus('error');
-                console.log(`[Stake WS] 连接关闭 (代码: ${event.code})`);
+                wsLog(`连接关闭 (代码: ${event.code})`);
                 
                 // 自动重连
                 if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                     reconnectAttempts++;
                     updateConnectionStatus('connecting');
-                    console.log(`[Stake WS] 尝试重连 ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}...`);
+                    wsLog(`尝试重连 ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}...`);
                     addLog('❌ 连接失败，正在尝试重连中...', 'info');
                     setTimeout(connect, RECONNECT_DELAY);
                 } else {
                     updateConnectionStatus('error');
-                    console.error('[Stake WS] 达到最大重连次数，请刷新页面');
+                    wsError('达到最大重连次数，请刷新页面');
                     addLog('❌ 连接失败，正在尝试重连中...', 'info');
                 }
             };
 
         } catch (e) {
-            console.error('[Stake WS] 连接异常:', e);
-            console.error('[Stake WS] 异常详情:', e.message, e.stack);
+            wsError('连接异常:', e);
+            wsError('异常详情:', e.message, e.stack);
             isConnecting = false;
             updateConnectionStatus('error');
-            console.error(`[Stake WS] 连接异常: ${e.message}`);
+            wsError(`连接异常: ${e.message}`);
         }
     }
 
     // ==================== 消息处理 ====================
     function handleMessage(data) {
-        console.log('[Stake WS] 收到消息:', data);
+        wsLog('收到消息:', data);
 
         if (data.type === 'connected') {
             updateConnectionStatus('connected');
@@ -1133,15 +1080,15 @@
             if (data.server_timestamp_ms) {
                 const clientTime = Date.now();
                 serverTimeOffset = data.server_timestamp_ms - clientTime;
-                console.log('[Stake WS] 时间同步:', {
+                wsLog('时间同步:', {
                     server_time: new Date(data.server_timestamp_ms).toISOString(),
                     client_time: new Date(clientTime).toISOString(),
                     offset_ms: serverTimeOffset,
                     offset_sec: (serverTimeOffset / 1000).toFixed(2)
                 });
-                console.log(`[Stake WS] 服务器确认连接 (时间已同步，偏移: ${(serverTimeOffset / 1000).toFixed(2)}秒)`);
+                wsLog(`服务器确认连接 (时间已同步，偏移: ${(serverTimeOffset / 1000).toFixed(2)}秒)`);
             } else {
-                console.log('[Stake WS] 服务器确认连接');
+                wsLog('服务器确认连接');
             }
             
             // 连接成功后更新用户名显示
@@ -1170,7 +1117,7 @@
     // ==================== 代码领取逻辑 ====================
     async function handleCodeReceived(data) {
         const code = data.code;
-        console.log('[Stake WS] 收到代码，立即领取:', code);
+        wsLog('收到代码，立即领取:', code);
         // 不在这里添加日志，已在 handleMessage 中添加
 
         // 直接调用 GraphQL 领取接口
@@ -1187,7 +1134,7 @@
                 const currency = result.data?.currency || '';
                 const formattedAmount = formatAmount(amount);
                 addLog(`✅ 领取成功: ${formattedAmount} ${currency}`, 'success');
-                console.log('[Stake WS] 领取成功:', result.data);
+                wsLog('领取成功:', result.data);
                 
                 // 发送成功结果回服务器（使用服务器时间）
                 sendClaimResultToServer({
@@ -1207,20 +1154,20 @@
                 if (isVaultAutoDepositEnabled() && amount && amount !== 'N/A') {
                     const depositAmount = parseFloat(amount);
                     if (!isNaN(depositAmount) && depositAmount > 0) {
-                        console.log(`[Stake WS] 💰 自动存入保险库: 原始金额 ${formattedAmount} ${currency}`);
+                        debugLog(`[Stake WS] 💰 自动存入保险库: 原始金额 ${formattedAmount} ${currency}`);
                         depositToVault(depositAmount, currency).then(depositResult => {
                             if (depositResult.success) {
                                 const depositedAmount = depositResult.data?.amount || '未知';
-                                console.log(`[Stake WS] ✅ 存入保险库成功: ${depositedAmount} ${currency}`);
+                                debugLog(`[Stake WS] ✅ 存入保险库成功: ${depositedAmount} ${currency}`);
                             } else {
-                                console.error('[Stake WS] ❌ 存入保险库失败:', depositResult.error);
+                                wsError('❌ 存入保险库失败:', depositResult.error);
                             }
                         });
                     }
                 }
             } else {
                 addLog(`❌ 领取失败: ${code} - ${result.error}`, 'error');
-                console.error('[Stake WS] 领取失败:', result.error);
+                wsError('领取失败:', result.error);
                 
                 // 确定错误状态
                 let status = 'error';
@@ -1252,7 +1199,7 @@
             }
         } catch (e) {
             addLog(`❌ 领取异常: ${code} - ${e.message}`, 'error');
-            console.error('[Stake WS] 领取异常:', e);
+            wsError('领取异常:', e);
             
             // 发送异常结果回服务器（使用服务器时间）
             sendClaimResultToServer({
@@ -1270,7 +1217,36 @@
         }
     }
     
-    // 从页面中获取用户名
+    // 验证用户名是否有效
+    function isValidUsername(username) {
+        if (!username || typeof username !== 'string') {
+            return false;
+        }
+        const trimmed = username.trim();
+        if (trimmed.length < 1 || trimmed.length > 50) {
+            return false;
+        }
+        // 过滤无效的用户名模式
+        const invalidPatterns = ['user:', 'user:user', 'user:user:user', 'user:user:user:user'];
+        const lower = trimmed.toLowerCase();
+        for (let pattern of invalidPatterns) {
+            if (lower.includes(pattern)) {
+                return false;
+            }
+        }
+        // 检查是否只是重复的 "user:" 或 "-"
+        const cleaned = lower.replace(/user:/g, '').replace(/-/g, '').replace(/\s/g, '');
+        if (cleaned === '') {
+            return false;
+        }
+        // 不能只是 "user" 或 "-"
+        if (trimmed === 'user' || trimmed === '-' || trimmed === 'user:') {
+            return false;
+        }
+        return true;
+    }
+    
+    // 从页面中获取用户名（懒加载：延迟获取，等待页面完全加载）
     function getUsernameFromPage() {
         try {
             // 方式1: 从 GraphQL 响应中提取（最可靠的方式）
@@ -1284,8 +1260,8 @@
                         const bodyData = JSON.parse(jsonData.body);
                         if (bodyData.data && bodyData.data.user && bodyData.data.user.name) {
                             const username = bodyData.data.user.name;
-                            if (username && username.length > 0 && username.length < 50) {
-                                console.log('[Stake WS] 从 GraphQL 响应中提取到用户名:', username);
+                            if (isValidUsername(username)) {
+                                wsLog('从 GraphQL 响应中提取到用户名:', username);
                                 return username;
                             }
                         }
@@ -1296,12 +1272,20 @@
                 }
             }
             
-            // 方式2: 从页面的用户信息元素中获取
+            // 方式2: 从页面的用户信息元素中获取（过滤掉包含 "user:" 标签的元素）
             const userElements = document.querySelectorAll('[data-username], [class*="username"], [id*="username"]');
             for (const el of userElements) {
-                const username = el.textContent?.trim() || el.getAttribute('data-username') || el.getAttribute('data-user');
-                if (username && username.length > 0 && username.length < 50) {
-                    console.log('[Stake WS] 从页面元素中提取到用户名:', username);
+                // 优先使用 data 属性，避免获取到标签文本
+                let username = el.getAttribute('data-username') || el.getAttribute('data-user');
+                if (!username) {
+                    // 如果 data 属性不存在，才使用 textContent，但要过滤掉 "user:" 这样的标签文本
+                    const text = el.textContent?.trim();
+                    if (text && !text.toLowerCase().includes('user:') && text.length > 0 && text.length < 50) {
+                        username = text;
+                    }
+                }
+                if (isValidUsername(username)) {
+                    wsLog('从页面元素中提取到用户名:', username);
                     return username;
                 }
             }
@@ -1310,8 +1294,8 @@
             for (let key of Object.keys(localStorage)) {
                 if (key.toLowerCase().includes('user') && !key.toLowerCase().includes('token')) {
                     const value = localStorage.getItem(key);
-                    if (value && value.length > 0 && value.length < 50) {
-                        console.log('[Stake WS] 从 localStorage 中提取到用户名:', value);
+                    if (isValidUsername(value)) {
+                        wsLog('从 localStorage 中提取到用户名:', value);
                         return value;
                     }
                 }
@@ -1319,8 +1303,8 @@
             
             // 方式4: 从 URL 或页面标题中提取
             const urlMatch = window.location.href.match(/\/user\/([^\/]+)/);
-            if (urlMatch) {
-                console.log('[Stake WS] 从 URL 中提取到用户名:', urlMatch[1]);
+            if (urlMatch && isValidUsername(urlMatch[1])) {
+                wsLog('从 URL 中提取到用户名:', urlMatch[1]);
                 return urlMatch[1];
             }
             
@@ -1332,26 +1316,27 @@
                 const nameMatch = content.match(/"name"\s*:\s*"([^"]{1,50})"/);
                 if (nameMatch && nameMatch[1]) {
                     const potentialUsername = nameMatch[1];
-                    // 过滤掉明显不是用户名的值（如 "足球"、"新游戏" 等）
-                    if (potentialUsername.length >= 3 && 
+                    // 过滤掉明显不是用户名的值
+                    if (isValidUsername(potentialUsername) && 
+                        potentialUsername.length >= 3 && 
                         potentialUsername.length <= 20 && 
                         /^[a-zA-Z0-9_-]+$/.test(potentialUsername)) {
-                        console.log('[Stake WS] 从 script 内容中提取到用户名:', potentialUsername);
+                        wsLog('从 script 内容中提取到用户名:', potentialUsername);
                         return potentialUsername;
                     }
                 }
             }
         } catch (e) {
-            console.warn('[Stake WS] 获取用户名失败:', e);
+            wsWarn('获取用户名失败:', e);
         }
-        console.warn('[Stake WS] 未能提取到用户名');
+        wsWarn('未能提取到有效用户名');
         return null;
     }
     
     // 发送领取结果回服务器
     function sendClaimResultToServer(resultData) {
         if (!ws || ws.readyState !== WebSocket.OPEN) {
-            console.warn('[Stake WS] WebSocket 未连接，无法发送领取结果');
+            wsWarn('WebSocket 未连接，无法发送领取结果');
             return;
         }
         
@@ -1373,30 +1358,36 @@
             };
             
             ws.send(JSON.stringify(message));
-            console.log('[Stake WS] 已发送领取结果到服务器:', message);
+            wsLog('已发送领取结果到服务器:', message);
         } catch (e) {
-            console.error('[Stake WS] 发送领取结果失败:', e);
+            wsError('发送领取结果失败:', e);
         }
     }
 
     // ==================== GraphQL 领取接口（仿照项目逻辑）====================
     async function claimBonusCodeViaAPI(code) {
         try {
-            // 1. 获取必要的请求信息
+            // 1. 获取必要的请求信息（带重试机制）
             let headers = getRequestHeaders();
+            let retryCount = 0;
+            const maxRetries = 5;
             
-            // 检查 token 是否存在，如果不存在则等待一下再试（可能页面还在加载）
-            if (!headers['x-access-token']) {
-                console.warn('[Stake WS] ⚠️ 未找到 token，等待 500ms 后重试...');
-                await new Promise(resolve => setTimeout(resolve, 500));
+            // 检查 session 是否存在，如果不存在则等待并重试（可能页面还在加载）
+            while (!headers['x-access-token'] && retryCount < maxRetries) {
+                retryCount++;
+                wsWarn(`⚠️ 未找到 session，等待 ${retryCount * 500}ms 后重试 (${retryCount}/${maxRetries})...`);
+                await new Promise(resolve => setTimeout(resolve, retryCount * 500));
+                
+                // 重新获取 headers（会重新从 cookie 中读取 session）
                 headers = getRequestHeaders();
-                if (!headers['x-access-token']) {
-                    console.error('[Stake WS] ❌ 无法获取 x-access-token，请确保已登录');
-                    return {
-                        success: false,
-                        error: '无法获取认证 Token，请确保已登录并刷新页面'
-                    };
-                }
+            }
+            
+            if (!headers['x-access-token']) {
+                wsError('❌ 无法获取 session，请确保已登录并刷新页面');
+                return {
+                    success: false,
+                    error: '无法获取 session，请确保已登录并刷新页面'
+                };
             }
             
             const currency = 'usdt';  // 默认货币类型
@@ -1406,7 +1397,7 @@
             
             if (!turnstileToken) {
                 // 如果获取失败，尝试刷新一次
-                console.log('[Stake WS] Token 获取失败，尝试刷新...');
+                wsLog('Turnstile Token 获取失败，尝试刷新...');
                 const refreshedToken = await refreshTurnstileToken();
                 if (!refreshedToken) {
                     return {
@@ -1414,15 +1405,10 @@
                         error: '获取 Turnstile Token 失败，请确保页面已加载完成'
                     };
                 }
-                // 使用刷新后的 Token
+                // 使用刷新后的 Turnstile Token
                 turnstileToken = refreshedToken;
             }
             
-            // 使用 Token 后立即在后台刷新下一个 Token（不阻塞当前请求）
-            refreshTurnstileToken().catch(e => {
-                console.error('[Stake WS] 后台刷新 Token 失败:', e);
-            });
-
             // 3. 构建 GraphQL mutation（完全仿照项目中的格式）
             const payload = {
                 "query": "mutation ClaimConditionBonusCode($code: String!, $currency: CurrencyEnum!, $turnstileToken: String!) {\n  claimConditionBonusCode(\n    code: $code\n    currency: $currency\n    turnstileToken: $turnstileToken\n  ) {\n    bonusCode {\n      id\n      code\n    }\n    amount\n    currency\n    user {\n      id\n      balances {\n        available {\n          amount\n          currency\n        }\n      }\n    }\n  }\n}",
@@ -1444,11 +1430,20 @@
                 credentials: 'include',  // 自动包含 Cookie
                 body: JSON.stringify(payload)
             });
+            
+            // 5. 使用 Turnstile Token 后，清空缓存和全局变量，并立即在后台获取新的（不阻塞当前请求）
+            turnstileTokenCache = null;
+            turnstileTokenExpireTime = null;
+            window.__TURNSTILETOKEN__ = null;  // 清空全局变量，确保下次从 widget 获取并触发 callback
+            // 后台刷新，确保下次有新的 Turnstile Token 可用（会触发 callback 输出日志）
+            refreshTurnstileToken().catch(e => {
+                wsError('后台刷新 Turnstile Token 失败:', e);
+            });
 
             const responseData = await response.json();
-            console.log('[Stake WS] API 响应:', responseData);
+            wsLog('API 响应:', responseData);
 
-            // 5. 解析响应（仿照项目中的逻辑）
+            // 6. 解析响应（仿照项目中的逻辑）
             if (response.status === 200) {
                 const errors = responseData.errors || [];
                 
@@ -1499,7 +1494,7 @@
                 };
             }
         } catch (e) {
-            console.error('[Stake WS] API 请求异常:', e);
+            wsError('API 请求异常:', e);
             return {
                 success: false,
                 error: e.message || '请求异常',
@@ -1518,192 +1513,75 @@
             'user-agent': navigator.userAgent,
         };
 
-        // 尝试从页面中获取 token（当前域名通常存储在 localStorage 或通过 API 获取）
-        const token = getStakeToken();
-        if (token) {
-            headers['x-access-token'] = token;
+        // 获取 session
+        const session = getSession();
+        if (session) {
+            headers['x-access-token'] = session;
         } else {
-            console.warn('[Stake WS] 未找到 x-access-token，可能影响请求');
+            wsWarn('未找到 session，可能影响请求');
         }
 
         return headers;
     }
 
-    // ==================== 获取 Stake Token ====================
-    function getStakeToken() {
-        // 尝试多种方式获取 token（按优先级排序）
+    // ==================== 获取 session ====================
+    // 从 cookie 中获取 session（只获取一次，和登录绑定，不变）
+    function getSession() {
+        // 如果缓存中有值，直接返回
+        if (sessionCache) {
+            return sessionCache;
+        }
+        
         try {
-            // 方式1: 从全局变量中获取（最可靠，由网络请求拦截更新）
-            // 但先尝试从最新的网络请求中获取（如果可能）
-            if (window.__STAKETOKEN__) {
-                // 检查 token 是否仍然有效（通过检查长度和格式）
-                const token = window.__STAKETOKEN__;
-                if (token && token.length > 20) {
-                    console.log('[Stake WS] 从全局变量获取到 Token (长度: ' + token.length + ')');
-                    return token;
-                } else {
-                    // Token 格式不正确，清除缓存
-                    console.warn('[Stake WS] ⚠️ 缓存的 Token 格式不正确，清除缓存');
-                    window.__STAKETOKEN__ = null;
+            // 从 cookie 中获取 session 字段（精确匹配，避免匹配到 session_info 等）
+            const cookies = document.cookie.split('; ');
+            const sessionCookie = cookies.find(row => {
+                const [name] = row.split('=');
+                return name === 'session';
+            });
+            
+            if (sessionCookie) {
+                const value = sessionCookie.split('=')[1];
+                if (value) {
+                    // 缓存 session，只获取一次，和登录绑定，不变
+                    sessionCache = value;
+                    debugLog('[session] 获取成功，已缓存');
+                    return sessionCache;
                 }
             }
             
-            // 方式2: 从页面的网络请求中实时拦截（如果拦截器已捕获）
-            // 这个已经在 interceptNetworkRequests 中实现
-            
-            // 方式3: 从 Apollo Client 中获取（如果页面使用 Apollo）
-            if (window.__APOLLO_CLIENT__) {
-                try {
-                    const client = window.__APOLLO_CLIENT__;
-                    if (client.defaultOptions && client.defaultOptions.headers) {
-                        const token = client.defaultOptions.headers['x-access-token'];
-                        if (token) {
-                            console.log('[Stake WS] 从 Apollo Client 获取到 Token');
-                            window.__STAKETOKEN__ = token; // 缓存到全局变量
-                            return token;
-                        }
-                    }
-                    // 尝试从 Apollo Client 的 link 中获取
-                    if (client.link && client.link.request) {
-                        const context = client.link.request?.operation?.getContext?.();
-                        if (context && context.headers && context.headers['x-access-token']) {
-                            const token = context.headers['x-access-token'];
-                            console.log('[Stake WS] 从 Apollo Client context 获取到 Token');
-                            window.__STAKETOKEN__ = token;
-                            return token;
-                        }
-                    }
-                } catch (e) {
-                    console.debug('[Stake WS] 从 Apollo Client 获取 Token 失败:', e);
-                }
-            }
-            
-            // 方式4: 从 localStorage/sessionStorage（备用方案）
-            for (let key of Object.keys(localStorage)) {
-                if (key.toLowerCase().includes('token') || key.toLowerCase().includes('access')) {
-                    const value = localStorage.getItem(key);
-                    if (value && value.length > 20) {  // token 通常比较长
-                        console.log('[Stake WS] 从 localStorage 获取到 Token');
-                        window.__STAKETOKEN__ = value; // 缓存到全局变量
-                        return value;
-                    }
-                }
-            }
-            
-            // 方式5: 从其他全局变量（备用方案）
-            if (window.stakeToken) {
-                console.log('[Stake WS] 从 window.stakeToken 获取到 Token');
-                window.__STAKETOKEN__ = window.stakeToken;
-                return window.stakeToken;
-            }
-
-            // 如果所有方式都失败，返回 null
-            console.warn('[Stake WS] ⚠️ 无法获取 Token，请确保页面已加载完成并已登录');
+            // 如果没找到 session cookie
+            wsWarn('⚠️ 未找到 session，请确保已登录');
             return null;
         } catch (e) {
-            console.error('[Stake WS] 获取 Token 失败:', e);
+            wsError('获取 session 失败:', e);
             return null;
         }
     }
 
     // ==================== Turnstile Token 获取器 ====================
     const TURNSTILE_SITE_KEY = '0x4AAAAAAAGD4gMGOTFnvupz';
-    let turnstileTokenCache = null;
+    const TURNSTILE_TOKEN_EXPIRE_TIME = 4 * 60 * 1000;  // Turnstile Token 过期时间（4分钟，毫秒）
+    
+    let turnstileTokenCache = null;  // Turnstile Token 缓存
+    let turnstileTokenExpireTime = null;  // Turnstile Token 过期时间戳
     let turnstileWidgetId = null;
     let isRefreshingToken = false;  // 防止重复刷新
     let tokenRefreshPromise = null;  // 刷新 Promise，避免并发刷新
     
-    // 尝试从页面已有的 Turnstile widget 中获取 token（备用方案，用于 CSP frame-src 阻止时）
-    function tryGetTokenFromPageTurnstile() {
-        try {
-            // 方法1: 从页面的全局变量中查找
-            if (window.__TURNSTILETOKEN__) {
-                console.log('[Stake WS] ✅ 从页面全局变量获取到 Turnstile Token');
-                turnstileTokenCache = window.__TURNSTILETOKEN__;
-                return turnstileTokenCache;
-            }
-            
-            // 方法2: 查找页面中已有的 Turnstile widget
-            const pageTurnstileContainers = document.querySelectorAll('[data-sitekey], [class*="cf-turnstile"], [id*="turnstile"]');
-            for (const container of pageTurnstileContainers) {
-                const iframe = container.querySelector('iframe');
-                if (iframe && iframe.src.includes('challenges.cloudflare.com')) {
-                    // 找到了页面的 Turnstile widget
-                    console.log('[Stake WS] ✅ 检测到页面已有的 Turnstile widget，将尝试从中获取 token');
-                    // 注意：无法直接读取 iframe 内容（跨域限制），但可以等待页面自动更新 token
-                    // 或者通过拦截网络请求获取（已在 interceptNetworkRequests 中实现）
-                    return null; // 暂时返回 null，等待页面更新或从网络请求中获取
-                }
-            }
-            
-            // 方法3: 从页面的网络请求中拦截 Turnstile token
-            // 这个已经在 interceptNetworkRequests 中实现了
-            
-            console.warn('[Stake WS] ⚠️ 无法从页面获取 Turnstile Token，将依赖网络请求拦截');
-            return null;
-        } catch (e) {
-            console.warn('[Stake WS] 从页面获取 Turnstile Token 失败:', e);
-            return null;
-        }
-    }
-
     // 初始化 Turnstile Token 获取器
     async function initTurnstileTokenGrabber() {
         try {
             // 加载 Cloudflare Turnstile API
             if (!window.turnstile) {
                 await new Promise((resolve, reject) => {
-                    try {
-                        const script = document.createElement('script');
-                        script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
-                        script.async = true;
-                        script.defer = true;
-                        script.onload = resolve;
-                        script.onerror = (error) => {
-                            // 检查是否是 CSP 错误
-                            const isCSPError = error?.message?.includes('CSP') || 
-                                             error?.message?.includes('Content Security Policy') ||
-                                             !script.src; // 如果 src 被清空，可能是 CSP 阻止
-                            if (isCSPError) {
-                                console.warn('[Stake WS] ⚠️ Turnstile API 加载被 CSP 阻止，将使用备用方案');
-                                // 尝试使用已存在的 Turnstile（如果页面已加载）
-                                if (window.turnstile) {
-                                    resolve();
-                                } else {
-                                    reject(new Error('CSP blocked script loading'));
-                                }
-                            } else {
-                                reject(error);
-                            }
-                        };
-                        // 捕获可能的 CSP 违规
-                        const timeout = setTimeout(() => {
-                            if (!window.turnstile) {
-                                console.warn('[Stake WS] ⚠️ Turnstile API 加载超时，可能被 CSP 阻止');
-                                reject(new Error('Script load timeout (possibly CSP blocked)'));
-                            }
-                        }, 10000); // 10秒超时
-                        
-                        script.onload = () => {
-                            clearTimeout(timeout);
-                            resolve();
-                        };
-                        
-                        document.head.appendChild(script);
-                    } catch (e) {
-                        // 捕获 CSP 违规异常
-                        if (e.name === 'SecurityError' || e.message?.includes('CSP') || e.message?.includes('Content Security Policy')) {
-                            console.warn('[Stake WS] ⚠️ CSP 阻止了脚本加载:', e.message);
-                            // 尝试使用已存在的 Turnstile
-                            if (window.turnstile) {
-                                resolve();
-                            } else {
-                                reject(new Error('CSP blocked: ' + e.message));
-                            }
-                        } else {
-                            reject(e);
-                        }
-                    }
+                    const script = document.createElement('script');
+                    script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+                    script.async = true;
+                    script.defer = true;
+                    script.onload = resolve;
+                    script.onerror = reject;
+                    document.head.appendChild(script);
                 });
             }
 
@@ -1721,23 +1599,11 @@
                         window.turnstile.remove(turnstileWidgetId);
                     } catch (e) {
                         // 忽略移除错误，可能 widget 已经不存在
-                        console.warn('[Stake WS] 移除旧 widget 时出错（可忽略）:', e.message);
+                        wsWarn('移除旧 widget 时出错（可忽略）:', e.message);
                     }
                 }
-                // 清空容器内容（使用更安全的方式避免 CSP 违规）
-                try {
-                    // 先尝试使用 innerHTML（更快）
-                    container.innerHTML = '';
-                } catch (e) {
-                    // 如果 innerHTML 被 CSP 阻止，使用 removeChild
-                    if (e.name === 'SecurityError' || e.message?.includes('CSP')) {
-                        while (container.firstChild) {
-                            container.removeChild(container.firstChild);
-                        }
-                    } else {
-                        throw e;
-                    }
-                }
+                // 清空容器内容
+                container.innerHTML = '';
                 turnstileWidgetId = null;
             }
 
@@ -1747,73 +1613,42 @@
                     turnstileWidgetId = window.turnstile.render(container, {
                         sitekey: TURNSTILE_SITE_KEY,
                         callback: function(token) {
-                            console.log('[Stake WS] ✅ 成功获取 Turnstile Token:', token.substring(0, 20) + '...');
+                            wsLog('✅ 成功获取 Turnstile Token:', token.substring(0, 20) + '...');
+                            // 缓存 Turnstile Token 和过期时间
                             turnstileTokenCache = token;
+                            turnstileTokenExpireTime = Date.now() + TURNSTILE_TOKEN_EXPIRE_TIME;
                             window.__TURNSTILETOKEN__ = token;  // 也存储到全局变量
                             isRefreshingToken = false;
                             tokenRefreshPromise = null;
                         },
                         'error-callback': function(err) {
-                            console.error('[Stake WS] ❌ Turnstile 错误:', err);
+                            wsError('❌ Turnstile 错误:', err);
                             turnstileTokenCache = null;
+                            turnstileTokenExpireTime = null;
                             isRefreshingToken = false;
                             tokenRefreshPromise = null;
-                            
-                            // 检查是否是 CSP frame-src 相关的错误
-                            const errorMsg = err?.toString() || '';
-                            if (errorMsg.includes('CSP') || errorMsg.includes('frame-src') || 
-                                errorMsg.includes('Content Security Policy') || 
-                                errorMsg.includes('violates') || errorMsg.includes('Framing')) {
-                                console.warn('[Stake WS] ⚠️ Turnstile 可能被 CSP frame-src 策略阻止');
-                                console.warn('[Stake WS] 💡 将尝试从页面已有的 Turnstile widget 或网络请求中获取 token');
-                                // 尝试从页面已有的 Turnstile widget 中获取 token
-                                tryGetTokenFromPageTurnstile();
-                            } else {
-                                // 其他错误，自动重试
-                                setTimeout(() => {
-                                    refreshTurnstileToken();
-                                }, 2000);
-                            }
+                            // 自动重试
+                            setTimeout(() => {
+                                refreshTurnstileToken();
+                            }, 2000);
                         },
                         'expired-callback': function() {
-                            console.warn('[Stake WS] ⚠️ Turnstile Token 已过期，正在自动刷新...');
+                            wsWarn('⚠️ Turnstile Token 已过期，正在自动刷新...');
                             turnstileTokenCache = null;
+                            turnstileTokenExpireTime = null;
                             // 自动重置并重新获取
                             refreshTurnstileToken();
                         }
                     });
                     
-                    // 检查 widget 是否真的创建成功（检测 iframe 是否存在）
-                    // 如果 CSP frame-src 阻止了 iframe 创建，widget 可能无法正常工作
-                    setTimeout(() => {
-                        const iframe = container.querySelector('iframe');
-                        if (!iframe) {
-                            console.warn('[Stake WS] ⚠️ Turnstile widget 无法创建 iframe（可能被 CSP frame-src 阻止）');
-                            console.warn('[Stake WS] 💡 将尝试从页面已有的 Turnstile widget 或网络请求中获取 token');
-                            // 尝试从页面已有的 Turnstile widget 中获取 token
-                            tryGetTokenFromPageTurnstile();
-                        } else {
-                            console.log('[Stake WS] ✅ Turnstile widget iframe 创建成功');
-                        }
-                    }, 2000); // 等待 2 秒让 iframe 创建
-                    
-                    console.log('[Stake WS] ✅ Turnstile Token 获取器已初始化');
+                    wsLog('✅ Turnstile Token 获取器已初始化');
                 } catch (e) {
-                    // 捕获渲染时的异常（可能是 CSP 阻止）
-                    if (e.name === 'SecurityError' || e.message?.includes('CSP') || 
-                        e.message?.includes('frame-src') || e.message?.includes('Framing') ||
-                        e.message?.includes('violates')) {
-                        console.warn('[Stake WS] ⚠️ Turnstile widget 渲染被 CSP frame-src 阻止:', e.message);
-                        console.warn('[Stake WS] 💡 将尝试从页面已有的 Turnstile widget 或网络请求中获取 token');
-                        // 尝试从页面已有的 Turnstile widget 中获取 token
-                        tryGetTokenFromPageTurnstile();
-                    } else {
-                        throw e;
-                    }
+                    wsError('❌ 初始化 Turnstile Token 获取器失败:', e);
+                    throw e;
                 }
             }
         } catch (e) {
-            console.error('[Stake WS] ❌ 初始化 Turnstile Token 获取器失败:', e);
+            wsError('❌ 初始化 Turnstile Token 获取器失败:', e);
         }
     }
 
@@ -1821,15 +1656,15 @@
     async function refreshTurnstileToken() {
         // 如果正在刷新，等待当前刷新完成
         if (isRefreshingToken && tokenRefreshPromise) {
-            console.log('[Stake WS] Token 正在刷新中，等待完成...');
+            wsLog('Token 正在刷新中，等待完成...');
             return await tokenRefreshPromise;
         }
 
         if (!window.turnstile) {
-            console.warn('[Stake WS] Turnstile API 未加载，尝试重新初始化...');
+            wsWarn('Turnstile API 未加载，尝试重新初始化...');
             await initTurnstileTokenGrabber();
             if (!window.turnstile) {
-                console.error('[Stake WS] ❌ 无法加载 Turnstile API');
+                wsError('❌ 无法加载 Turnstile API');
                 return null;
             }
         }
@@ -1837,27 +1672,27 @@
         // 检查容器是否存在
         const container = document.getElementById('stake-ws-turnstile-container');
         if (!container) {
-            console.warn('[Stake WS] Turnstile 容器不存在，重新初始化...');
+            wsWarn('Turnstile 容器不存在，重新初始化...');
             turnstileWidgetId = null;
             await initTurnstileTokenGrabber();
             if (!turnstileWidgetId) {
-                console.error('[Stake WS] ❌ 无法初始化 Turnstile widget');
+                wsError('❌ 无法初始化 Turnstile widget');
                 return null;
             }
         }
 
         // 如果 widget ID 无效，重新初始化
         if (!turnstileWidgetId) {
-            console.warn('[Stake WS] Turnstile widget ID 无效，重新初始化...');
+            wsWarn('Turnstile widget ID 无效，重新初始化...');
             await initTurnstileTokenGrabber();
             if (!turnstileWidgetId) {
-                console.error('[Stake WS] ❌ 无法获取 Turnstile widget ID');
+                wsError('❌ 无法获取 Turnstile widget ID');
                 return null;
             }
         }
 
         isRefreshingToken = true;
-        console.log('[Stake WS] 🔄 开始刷新 Turnstile Token...');
+        wsLog('🔄 开始刷新 Turnstile Token...');
         
         // 创建刷新 Promise
         tokenRefreshPromise = new Promise((resolve) => {
@@ -1866,19 +1701,19 @@
                 window.turnstile.reset(turnstileWidgetId);
             } catch (e) {
                 // 如果 reset 失败（例如 widget 不存在），尝试重新初始化
-                console.warn('[Stake WS] ⚠️ Reset 失败，尝试重新初始化 widget:', e.message);
+                wsWarn('⚠️ Reset 失败，尝试重新初始化 widget:', e.message);
                 turnstileWidgetId = null;
                 turnstileTokenCache = null;
                 
                 // 重新初始化
                 initTurnstileTokenGrabber().then(() => {
-                    // 等待新 widget 生成 token
+                    // 等待新 widget 生成 Turnstile Token
                     const checkInterval = setInterval(() => {
                         if (turnstileTokenCache) {
                             clearInterval(checkInterval);
                             isRefreshingToken = false;
                             tokenRefreshPromise = null;
-                            console.log('[Stake WS] ✅ Token 通过重新初始化获取成功');
+                            wsLog('✅ Turnstile Token 通过重新初始化获取成功');
                             resolve(turnstileTokenCache);
                         }
                     }, 500);
@@ -1889,12 +1724,12 @@
                         if (!turnstileTokenCache) {
                             isRefreshingToken = false;
                             tokenRefreshPromise = null;
-                            console.error('[Stake WS] ❌ 重新初始化后 Token 获取超时');
+                            wsError('❌ 重新初始化后 Turnstile Token 获取超时');
                             resolve(null);
                         }
                     }, 10000);
                 }).catch(err => {
-                    console.error('[Stake WS] ❌ 重新初始化失败:', err);
+                    wsError('❌ 重新初始化失败:', err);
                     isRefreshingToken = false;
                     tokenRefreshPromise = null;
                     resolve(null);
@@ -1902,13 +1737,12 @@
                 return;
             }
             
-            // 等待新 Token 生成（最多等待 10 秒）
+            // 等待新 Turnstile Token 生成（最多等待 10 秒）
             const checkInterval = setInterval(() => {
                 if (turnstileTokenCache) {
                     clearInterval(checkInterval);
                     isRefreshingToken = false;
                     tokenRefreshPromise = null;
-                    console.log('[Stake WS] ✅ Token 刷新成功');
                     resolve(turnstileTokenCache);
                 }
             }, 500);
@@ -1919,7 +1753,7 @@
                 if (!turnstileTokenCache) {
                     isRefreshingToken = false;
                     tokenRefreshPromise = null;
-                    console.error('[Stake WS] ❌ Token 刷新超时');
+                    wsError('❌ Turnstile Token 刷新超时');
                     resolve(null);
                 }
             }, 10000);
@@ -1930,45 +1764,46 @@
 
     // ==================== 获取 Turnstile Token ====================
     async function getTurnstileToken(code, currency) {
-        // 方式1: 从缓存中获取（如果已有）
-        if (turnstileTokenCache) {
-            console.log('[Stake WS] 使用缓存的 Turnstile Token');
-            // 使用后立即刷新，确保下次有新的 Token
-            refreshTurnstileToken().catch(e => {
-                console.error('[Stake WS] 后台刷新 Token 失败:', e);
-            });
-            return turnstileTokenCache;
+        // 方式1: 从缓存中获取（检查是否过期）
+        if (turnstileTokenCache && turnstileTokenExpireTime) {
+            const now = Date.now();
+            if (now < turnstileTokenExpireTime) {
+                // Token 未过期，直接返回
+                debugLog('[Turnstile Token] 使用缓存的 Token');
+                return turnstileTokenCache;
+            } else {
+                // Token 已过期，清空缓存
+                wsWarn('⚠️ Turnstile Token 已过期，重新获取...');
+                turnstileTokenCache = null;
+                turnstileTokenExpireTime = null;
+            }
         }
 
         // 方式2: 从全局变量获取
         if (window.__TURNSTILETOKEN__) {
             turnstileTokenCache = window.__TURNSTILETOKEN__;
-            // 使用后立即刷新
-            refreshTurnstileToken().catch(e => {
-                console.error('[Stake WS] 后台刷新 Token 失败:', e);
-            });
+            turnstileTokenExpireTime = Date.now() + TURNSTILE_TOKEN_EXPIRE_TIME;
+            debugLog('[Turnstile Token] 从全局变量获取');
             return turnstileTokenCache;
         }
 
         // 方式3: 确保 Turnstile 已初始化
         if (!window.turnstile || !turnstileWidgetId) {
-            console.log('[Stake WS] 初始化 Turnstile Token 获取器...');
+            wsLog('初始化 Turnstile Token 获取器...');
             await initTurnstileTokenGrabber();
-            // 等待 Token 生成（最多等待 10 秒）
+            // 等待 Turnstile Token 生成（最多等待 10 秒）
             for (let i = 0; i < 20; i++) {
                 await new Promise(resolve => setTimeout(resolve, 500));
                 if (turnstileTokenCache || window.__TURNSTILETOKEN__) {
-                    turnstileTokenCache = turnstileTokenCache || window.__TURNSTILETOKEN__;
-                    // 获取到 Token 后，立即在后台刷新下一个
-                    refreshTurnstileToken().catch(e => {
-                        console.error('[Stake WS] 后台刷新 Token 失败:', e);
-                    });
+                    const token = turnstileTokenCache || window.__TURNSTILETOKEN__;
+                    turnstileTokenCache = token;
+                    turnstileTokenExpireTime = Date.now() + TURNSTILE_TOKEN_EXPIRE_TIME;
                     return turnstileTokenCache;
                 }
             }
         } else {
-            // 如果 widget 已存在但 Token 不存在，刷新并等待
-            console.log('[Stake WS] 刷新 Turnstile widget 以获取新 Token...');
+            // 如果 widget 已存在但 Turnstile Token 不存在，刷新并等待
+            wsLog('刷新 Turnstile widget 以获取新 Turnstile Token...');
             const newToken = await refreshTurnstileToken();
             if (newToken) {
                 return newToken;
@@ -1978,14 +1813,11 @@
         // 方式4: 从拦截的网络请求中获取（如果页面已经发送过请求）
         if (window.__TURNSTILETOKEN__) {
             turnstileTokenCache = window.__TURNSTILETOKEN__;
-            // 使用后立即刷新
-            refreshTurnstileToken().catch(e => {
-                console.error('[Stake WS] 后台刷新 Token 失败:', e);
-            });
+            turnstileTokenExpireTime = Date.now() + TURNSTILE_TOKEN_EXPIRE_TIME;
             return turnstileTokenCache;
         }
 
-        console.warn('[Stake WS] ⚠️ 无法获取 Turnstile Token');
+        wsWarn('⚠️ 无法获取 Turnstile Token');
         return null;
     }
 
@@ -1996,22 +1828,13 @@
         window.fetch = function(...args) {
             const [url, options] = args;
             
-            // 获取 x-access-token
-            if (options && options.headers) {
-                const token = options.headers['x-access-token'] || options.headers['X-Access-Token'];
-                if (token) {
-                    window.__STAKETOKEN__ = token;
-                    console.log('[Stake WS] 从请求中获取到 Token');
-                }
-            }
-            
             // 获取 Turnstile token（从请求体中）
             if (options && options.body) {
                 try {
                     const body = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
                     if (body.variables && body.variables.turnstileToken) {
                         window.__TURNSTILETOKEN__ = body.variables.turnstileToken;
-                        console.log('[Stake WS] 从请求中获取到 Turnstile Token');
+                        wsLog('从请求中获取到 Turnstile Token');
                     }
                 } catch (e) {
                     // 忽略解析错误
@@ -2021,16 +1844,6 @@
             return originalFetch.apply(this, args);
         };
 
-        // 拦截 XMLHttpRequest
-        const originalSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
-        XMLHttpRequest.prototype.setRequestHeader = function(header, value) {
-            if (header.toLowerCase() === 'x-access-token') {
-                window.__STAKETOKEN__ = value;
-                console.log('[Stake WS] 从 XHR 请求中获取到 Token');
-            }
-            return originalSetRequestHeader.apply(this, arguments);
-        };
-        
         // 拦截 XMLHttpRequest 的 send 方法，获取请求体中的 Turnstile token
         const originalSend = XMLHttpRequest.prototype.send;
         XMLHttpRequest.prototype.send = function(body) {
@@ -2038,8 +1851,13 @@
                 try {
                     const data = typeof body === 'string' ? JSON.parse(body) : body;
                     if (data.variables && data.variables.turnstileToken) {
-                        window.__TURNSTILETOKEN__ = data.variables.turnstileToken;
-                        console.log('[Stake WS] 从 XHR 请求中获取到 Turnstile Token');
+                        const token = data.variables.turnstileToken;
+                        window.__TURNSTILETOKEN__ = token;
+                        if (!turnstileTokenCache) {
+                            turnstileTokenCache = token;
+                            turnstileTokenExpireTime = Date.now() + TURNSTILE_TOKEN_EXPIRE_TIME;
+                        }
+                        debugLog('[Turnstile Token] 从 XHR 请求中获取');
                     }
                 } catch (e) {
                     // 忽略解析错误
@@ -2051,8 +1869,41 @@
 
     // ==================== 初始化 ====================
     function init() {
-        console.log('[Stake WS] 脚本初始化');
-        createStatusUI();
+        wsLog('脚本初始化');
+        
+        // 确保 document.body 存在后再创建 UI
+        function ensureBodyAndCreateUI() {
+            if (document.body) {
+                try {
+                    createStatusUI();
+                    wsLog('✅ UI 创建成功');
+                } catch (e) {
+                    // 使用原始 console.error 输出，避免被拦截
+                    originalConsoleError('[Stake WS] ❌ UI 创建失败:', e);
+                }
+            } else {
+                wsWarn('⚠️ document.body 尚未准备好，等待...');
+                // 如果 body 还没准备好，等待
+                if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', function() {
+                        if (document.body) {
+                            try {
+                                createStatusUI();
+                                wsLog('✅ UI 创建成功（DOMContentLoaded）');
+                            } catch (e) {
+                                originalConsoleError('[Stake WS] ❌ UI 创建失败:', e);
+                            }
+                        } else {
+                            setTimeout(ensureBodyAndCreateUI, 100);
+                        }
+                    });
+                } else {
+                    setTimeout(ensureBodyAndCreateUI, 100);
+                }
+            }
+        }
+        
+        ensureBodyAndCreateUI();
         
         // 拦截网络请求以获取 Token
         interceptNetworkRequests();

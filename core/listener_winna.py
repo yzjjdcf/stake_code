@@ -607,7 +607,22 @@ async def broadcast_to_clients(message_data):
 
 async def websocket_handler(websocket, path):
     """WebSocket 连接处理器"""
+    # 获取真实客户端IP（优先从 Nginx 反向代理头中获取）
     client_addr = websocket.remote_address
+    try:
+        # 尝试从请求头中获取真实IP（Nginx 反向代理会设置这些头）
+        headers = websocket.request_headers
+        real_ip = headers.get('X-Real-IP') or headers.get('X-Forwarded-For')
+        if real_ip:
+            # X-Forwarded-For 可能包含多个IP，取第一个
+            if ',' in real_ip:
+                real_ip = real_ip.split(',')[0].strip()
+            # 只更新IP，保留端口
+            client_addr = (real_ip, client_addr[1])
+    except Exception:
+        # 如果获取失败，使用默认的 remote_address
+        pass
+    
     client_username = None  # 客户端用户名（等待初始化消息）
     connected_clients.add(websocket)
     client_addr_map[websocket] = client_addr  # 保存地址映射
@@ -661,8 +676,12 @@ async def websocket_handler(websocket, path):
                 logger.warning(f"⚠️ 收到无效的 JSON 消息: {message}")
             except Exception as e:
                 logger.error(f"❌ 处理客户端消息时出错: {e}", exc_info=True)
-    except websockets.exceptions.ConnectionClosed:
-        logger.info(f"🔌 客户端断开连接: {client_addr}")
+    except (websockets.exceptions.ConnectionClosed,
+            websockets.exceptions.ConnectionClosedError,
+            websockets.exceptions.ConnectionClosedOK,
+            asyncio.IncompleteReadError):
+        # 客户端正常或异常断开，静默处理（避免 "Future exception was never retrieved" 警告）
+        pass
     except Exception as e:
         logger.error(f"❌ WebSocket 处理错误: {e}", exc_info=True)
     finally:
