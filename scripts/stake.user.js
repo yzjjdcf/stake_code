@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Stake code claim tool
 // @namespace    http://tampermonkey.net/
-// @version      1.1.1
+// @version      1.1.0
 // @description  Stake 代码自动领取工具
 // @author       You
 // @match        https://stake.com/*settings/offers*
