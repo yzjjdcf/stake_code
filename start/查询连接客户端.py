@@ -31,17 +31,20 @@ def load_connections(conn_file):
         return []
 
 def format_connections(connections, service_name):
-    """格式化并显示连接信息"""
+    """格式化并显示连接信息（按IP地址排序，相同IP放在一起）"""
     if not connections:
         print(f"\n{service_name}: 无连接")
         return
     
-    print(f"\n{service_name} 连接列表 (共 {len(connections)} 个):")
+    # 按IP地址排序，相同IP放在一起
+    sorted_connections = sorted(connections, key=lambda x: x.get('ip', ''))
+    
+    print(f"\n{service_name} 连接列表 (共 {len(sorted_connections)} 个):")
     print("=" * 80)
     print(f"{'序号':<6} {'Username':<20} {'IP 地址':<20} {'端口':<8} {'最后更新':<20}")
     print("-" * 80)
     
-    for idx, conn in enumerate(connections, 1):
+    for idx, conn in enumerate(sorted_connections, 1):
         username = conn.get('username', '-')
         ip = conn.get('ip', '-')
         port = conn.get('port', '-')
