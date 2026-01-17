@@ -293,7 +293,8 @@ def query_code_availability(account, target_code, config):
         "referer": f"https://stake.com/zh/settings/offers?type=drop&code={target_code}",
         "x-operation-name": "BonusCodeInformation",
     })
-    
+    # 68a8f427275596ca5d8858f407c08e2e5376a19329c46338daa995d1d0cbf37e4766a0e2862feffbae2ab3f481271e9d
+
     # 构建查询接口的请求体
     payload = {
         "query": "query BonusCodeInformation($code: String!, $couponType: CouponType!) {\n  bonusCodeInformation(code: $code, couponType: $couponType) {\n    availabilityStatus\n    bonusValue\n  }\n}",
@@ -649,6 +650,8 @@ def claim_bonus_code(account, target_code, cookie_dict, proxies, log_port, locat
                     # 检查错误类型
                     if error_type == 'notFound' or 'not found' in error_msg.lower() or 'cannot be found' in error_msg.lower():
                         return 'not_found', claim_response_body_str
+                    elif error_type == 'dropUnavailable' or (error_msg and 'drop_unavailable' in error_msg.lower()):
+                        return 'drop_unavailable', claim_response_body_str
                     elif error_type == 'bonusCodeInactive' or 'unavailable' in error_msg.lower():
                         return 'inactive', claim_response_body_str
                     elif error_type == 'disabledSession' or 'session has expired' in error_msg.lower() or 'session expired' in error_msg.lower():

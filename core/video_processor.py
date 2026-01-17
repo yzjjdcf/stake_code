@@ -7,6 +7,7 @@ import os
 import logging
 import time
 import tempfile
+import threading
 import cv2
 import numpy as np
 
@@ -96,7 +97,7 @@ def extract_white_code_region(frame):
         return frame  # 失败时返回原始帧
 
 
-async def parse_code_daily_code_async(text, message=None, has_video=False, download_func=None):
+async def parse_code_daily_code_async(text, message=None, has_video=False, download_func=None, send_code_callback=None):
     """
     解析 Daily Code 频道的代码（异步版本，用于视频）
     支持两种情况：
@@ -108,6 +109,8 @@ async def parse_code_daily_code_async(text, message=None, has_video=False, downl
         message: 消息对象（不同库的格式不同，需要适配）
         has_video: 是否有视频
         download_func: 下载视频的函数，接受 message 参数，返回文件路径
+        send_code_callback: 可选的回调函数，用于发送代码（用于二次识别后的发送）
+                           函数签名: send_code_callback(code: str) -> None
     """
     parse_start_time = time.perf_counter()
     
@@ -174,6 +177,49 @@ async def parse_code_daily_code_async(text, message=None, has_video=False, downl
                 
                 # 优先使用 Tesseract OCR（本地识别，速度快）
                 code = recognize_code_with_tesseract(cropped_frame)
+                
+                # 如果首次识别成功，进行验证和二次识别流程
+                if code:
+                    # 保存图片用于二次识别（如果需要）
+                    image_base64 = compress_image_to_base64(cropped_frame, quality=75, max_size=(800, 800))
+                    
+                    # 首次识别成功，立即返回（让原有流程通过 WebSocket 发送）
+                    # 同时在后台进行验证，如果失败则二次识别并再次发送
+                    def verify_and_retry(code1, image_base64_for_retry, callback):
+                        """后台验证和二次识别"""
+                        try:
+                            from ocr_utils import query_code_simple
+                            
+                            # 调用查询接口验证
+                            is_not_found, response_data = query_code_simple(code1)
+                            
+                            if is_not_found:
+                                logger.info(f"🔄 首次识别代码不存在，开始二次识别: {code1}")
+                                
+                                # 二次识别（使用 AI API）
+                                from ocr_utils import recognize_code_with_api
+                                code2 = recognize_code_with_api(image_base64=image_base64_for_retry)
+                                
+                                if code2 and code2 != code1:
+                                    logger.info(f"✅ 二次识别成功: {code2} (首次: {code1})")
+                                    # 如果提供了发送回调函数，调用它发送二次识别的代码
+                                    if callback:
+                                        try:
+                                            callback(code2)
+                                            logger.info(f"📤 二次识别代码已发送: {code2}")
+                                        except Exception as send_err:
+                                            logger.error(f"❌ 发送二次识别代码失败: {send_err}")
+                                else:
+                                    logger.warning(f"⚠️ 二次识别失败或结果相同: {code2}")
+                            else:
+                                logger.info(f"✅ 首次识别验证通过，无需二次识别: {code1}")
+                        except Exception as e:
+                            logger.error(f"❌ 验证和二次识别过程出错: {e}", exc_info=True)
+                    
+                    # 在后台线程中执行验证和二次识别（不阻塞）
+                    thread = threading.Thread(target=verify_and_retry, args=(code, image_base64, send_code_callback), daemon=True)
+                    thread.start()
+                    logger.info(f"🚀 首次识别完成: {code}，已启动后台验证流程")
                 
                 # 如果 Tesseract 识别失败，尝试 OCR API（formData 方式）
                 # if not code:

@@ -16,6 +16,7 @@ class ClaimRecord(models.Model):
         ('session_expired', '⚠️ 会话已过期'),
         ('already_claimed', '🔁 已领过'),
         ('weekly_wager_requirement', '📋 流水不够'),
+        ('drop_unavailable', '⏰ 7天内不能领代码'),
         ('error_403', '⚠️ 403错误'),
         ('error', '❓ 其他错误'),
     ]

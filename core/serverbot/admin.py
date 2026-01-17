@@ -139,6 +139,7 @@ class ClaimRecordAdmin(admin.ModelAdmin):
             'session_expired': '#ff9800',      # 橙色
             'already_claimed': '#6f42c1',     # 紫色
             'weekly_wager_requirement': '#17a2b8', # 蓝色
+            'drop_unavailable': '#ff9800',     # 橙色
             'error': '#dc3545',                # 红色
         }
         status_display = obj.get_status_display()

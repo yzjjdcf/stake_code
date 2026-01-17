@@ -120,6 +120,7 @@
     let statusElement = null;
     let serverTimeOffset = 0;  // 服务器时间偏移量（服务器时间 - 客户端时间，毫秒）
     let sessionCache = null;  // session 缓存（只获取一次，和登录绑定，不变）
+    let lastConnectionStatus = null;  // 上一次的连接状态（'connected', 'disconnected', 'error'），用于判断状态变化
 
     // ==================== UI 状态显示（终端风格）====================
     let logContainer = null;
@@ -357,9 +358,12 @@
                 word-break: break-all;
                 user-select: text;
             }
+            .log-time { color: #8a8d92; }
             .log-success { color: #6df5f0; }
-            .log-info { color: #a0a0a5; }
-            .log-error { color: #ff6b60; }
+            .log-info { color: #8a8d92; }
+            .log-error { color: #b0b0b5; }
+            .log-error-prefix { color: #8a8d92; }
+            .log-error-text { color: #ff6b60; }
             .log-code { color: #ffdd44; font-weight: 700; }
             .log-warning { color: #ffdd44; }
 
@@ -629,15 +633,38 @@
         // 使用服务器时间格式化时间戳
         const timeDate = useServerTime ? getServerTime() : new Date();
         const timeStr = formatServerTime(timeDate);
+        const timeSpan = `<span class="log-time">[${timeStr}]</span>`;
         
-        // 高亮代码
+        // 处理错误类型的特殊格式（前缀灰色，错误文字红色）
         let formattedMessage = message;
-        const codeMatch = message.match(/([A-Za-z0-9]{8,})/);
-        if (codeMatch) {
-            formattedMessage = message.replace(codeMatch[0], `<span class="log-code">${codeMatch[0]}</span>`);
+        if (type === 'error' && message.includes('领取失败:')) {
+            // 匹配格式：❌ 领取失败: <code> - <error>
+            const errorMatch = message.match(/^(.*?领取失败:\s*)([A-Za-z0-9]{8,})(\s*-\s*)(.+)$/);
+            if (errorMatch) {
+                const prefix = errorMatch[1];  // "❌ 领取失败: "
+                const code = errorMatch[2];     // 代码
+                const separator = errorMatch[3]; // " - "
+                const errorText = errorMatch[4]; // 错误信息
+                formattedMessage = `<span class="log-error-prefix">${prefix}</span><span class="log-code">${code}</span><span class="log-error-prefix">${separator}</span><span class="log-error-text">${errorText}</span>`;
+            } else {
+                // 如果格式不匹配，尝试匹配其他错误格式
+                const codeMatch = message.match(/([A-Za-z0-9]{8,})/);
+                if (codeMatch) {
+                    formattedMessage = message.replace(codeMatch[0], `<span class="log-code">${codeMatch[0]}</span>`);
+                }
+                formattedMessage = formattedMessage.replace(/领取失败:\s*/g, '<span class="log-error-prefix">领取失败: </span>');
+                // 将错误信息部分（冒号后的内容）设置为红色
+                formattedMessage = formattedMessage.replace(/:\s*([^<]+)$/, ': <span class="log-error-text">$1</span>');
+            }
+        } else {
+            // 高亮代码（非错误类型）
+            const codeMatch = message.match(/([A-Za-z0-9]{8,})/);
+            if (codeMatch) {
+                formattedMessage = message.replace(codeMatch[0], `<span class="log-code">${codeMatch[0]}</span>`);
+            }
         }
         
-        logItem.innerHTML = `[${timeStr}] ${formattedMessage}`;
+        logItem.innerHTML = `${timeSpan} ${formattedMessage}`;
         logContainer.appendChild(logItem);
         
         // 自动滚动到底部
@@ -925,7 +952,11 @@
                 isConnecting = false;
                 reconnectAttempts = 0;
                 updateConnectionStatus('connected');
-                addLog('✅ 连接成功', 'success');
+                // 只在状态变化时添加日志
+                if (lastConnectionStatus !== 'connected') {
+                    addLog('✅ 连接成功', 'success');
+                    lastConnectionStatus = 'connected';
+                }
                 
                 // 如果连接前已经获取到用户名，立即发送
                 if (preUsername && isValidUsername(preUsername)) {
@@ -1046,17 +1077,24 @@
                 updateConnectionStatus('error');
                 wsLog(`连接关闭 (代码: ${event.code})`);
                 
+                // 只在状态变化时添加日志（从连接成功变为失败）
+                if (lastConnectionStatus === 'connected') {
+                    addLog('❌ 连接失败，正在尝试重连中...', 'info');
+                    lastConnectionStatus = 'disconnected';
+                }
+                
                 // 自动重连
                 if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                     reconnectAttempts++;
                     updateConnectionStatus('connecting');
                     wsLog(`尝试重连 ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}...`);
-                    addLog('❌ 连接失败，正在尝试重连中...', 'info');
+                    // 不添加日志，因为状态没有变化（仍然是失败状态）
                     setTimeout(connect, RECONNECT_DELAY);
                 } else {
                     updateConnectionStatus('error');
                     wsError('达到最大重连次数，请刷新页面');
-                    addLog('❌ 连接失败，正在尝试重连中...', 'info');
+                    addLog('❌ 连接失败，联系管理员', 'info');
+                    // 不添加日志，因为状态没有变化
                 }
             };
 
@@ -1181,6 +1219,8 @@
                     status = 'already_claimed';
                 } else if (result.error.includes('投注额') || result.error.includes('wager') || result.error.includes('weeklyWagerRequirement')) {
                     status = 'weekly_wager_requirement';
+                } else if (result.error.includes('7天内不能领代码') || result.error.includes('dropUnavailable') || result.error.includes('drop_unavailable')) {
+                    status = 'drop_unavailable';
                 }
                 
                 // 发送失败结果回服务器（使用服务器时间）
@@ -1436,8 +1476,15 @@
             turnstileTokenExpireTime = null;
             window.__TURNSTILETOKEN__ = null;  // 清空全局变量，确保下次从 widget 获取并触发 callback
             // 后台刷新，确保下次有新的 Turnstile Token 可用（会触发 callback 输出日志）
-            refreshTurnstileToken().catch(e => {
-                wsError('后台刷新 Turnstile Token 失败:', e);
+            wsLog('🔄 使用 Token 后，开始后台刷新 Turnstile Token...');
+            refreshTurnstileToken(3).then(token => {
+                if (token) {
+                    wsLog('✅ 后台刷新 Turnstile Token 成功');
+                } else {
+                    wsWarn('⚠️ 后台刷新 Turnstile Token 失败，将在下次使用时重试');
+                }
+            }).catch(e => {
+                wsError('❌ 后台刷新 Turnstile Token 异常:', e);
             });
 
             const responseData = await response.json();
@@ -1452,10 +1499,97 @@
                     const errorType = error.errorType || '';
                     const errorMsg = error.message || '未知错误';
                     
+                    // 检查是否是 invalid_turnstile 错误，如果是则自动刷新 token 并重试一次
+                    if (errorType === 'invalidTurnstile' || errorMsg.includes('invalid_turnstile') || errorMsg.includes('invalid turnstile')) {
+                        wsWarn('⚠️ 检测到 invalid_turnstile 错误，自动刷新 Turnstile Token 并重试...');
+                        
+                        // 强制刷新 Turnstile Token
+                        turnstileTokenCache = null;
+                        turnstileTokenExpireTime = null;
+                        window.__TURNSTILETOKEN__ = null;
+                        
+                        const newToken = await refreshTurnstileToken(3);
+                        if (newToken) {
+                            wsLog('✅ Turnstile Token 刷新成功，重新发送请求...');
+                            // 使用新的 token 重新发送请求（只重试一次）
+                            const retryPayload = {
+                                "query": "mutation ClaimConditionBonusCode($code: String!, $currency: CurrencyEnum!, $turnstileToken: String!) {\n  claimConditionBonusCode(\n    code: $code\n    currency: $currency\n    turnstileToken: $turnstileToken\n  ) {\n    bonusCode {\n      id\n      code\n    }\n    amount\n    currency\n    user {\n      id\n      balances {\n        available {\n          amount\n          currency\n        }\n      }\n    }\n  }\n}",
+                                "variables": {
+                                    "code": code,
+                                    "currency": currency.toLowerCase(),
+                                    "turnstileToken": newToken
+                                }
+                            };
+                            
+                            const retryResponse = await fetch(getGraphQLApiUrl(), {
+                                method: 'POST',
+                                headers: {
+                                    ...headers,
+                                    'referer': `${getCurrentOrigin()}/zh/settings/offers?type=drop&code=${code}`,
+                                    'x-operation-name': 'ClaimConditionBonusCode'
+                                },
+                                credentials: 'include',
+                                body: JSON.stringify(retryPayload)
+                            });
+                            
+                            // 使用新 token 后，清空缓存并后台刷新
+                            turnstileTokenCache = null;
+                            turnstileTokenExpireTime = null;
+                            window.__TURNSTILETOKEN__ = null;
+                            refreshTurnstileToken().catch(e => {
+                                wsError('后台刷新 Turnstile Token 失败:', e);
+                            });
+                            
+                            const retryResponseData = await retryResponse.json();
+                            wsLog('重试 API 响应:', retryResponseData);
+                            
+                            // 处理重试后的响应
+                            if (retryResponse.status === 200) {
+                                const retryErrors = retryResponseData.errors || [];
+                                if (retryErrors.length > 0) {
+                                    // 重试后仍有错误，按正常错误处理
+                                    const retryError = retryErrors[0];
+                                    const retryErrorType = retryError.errorType || '';
+                                    const retryErrorMsg = retryError.message || '未知错误';
+                                    return { 
+                                        success: false, 
+                                        error: retryErrorMsg,
+                                        fullResponse: retryResponseData
+                                    };
+                                } else {
+                                    // 重试成功
+                                    const claimResult = retryResponseData.data?.claimConditionBonusCode;
+                                    const formattedAmount = formatAmount(claimResult?.amount);
+                                    return {
+                                        success: true,
+                                        data: claimResult,
+                                        fullResponse: retryResponseData,
+                                        message: `领取成功！金额: ${formattedAmount} ${claimResult?.currency || ''}`
+                                    };
+                                }
+                            } else {
+                                return {
+                                    success: false,
+                                    error: `HTTP ${retryResponse.status}`,
+                                    fullResponse: retryResponseData
+                                };
+                            }
+                        } else {
+                            wsError('❌ Turnstile Token 刷新失败，无法重试');
+                            return { 
+                                success: false, 
+                                error: 'Turnstile Token 无效且刷新失败',
+                                fullResponse: responseData
+                            };
+                        }
+                    }
+                    
                     // 根据错误类型返回相应状态（完全仿照项目逻辑）
                     let errorStatus = '未知错误';
                     if (errorType === 'notFound' || errorMsg.includes('not found') || errorMsg.includes('cannot be found')) {
                         errorStatus = '代码不存在';
+                    } else if (errorType === 'dropUnavailable' || errorMsg.includes('drop_unavailable')) {
+                        errorStatus = '7天内不能领代码';
                     } else if (errorType === 'bonusCodeInactive' || errorMsg.includes('unavailable')) {
                         errorStatus = '代码已失效';
                     } else if (errorType === 'disabledSession' || errorMsg.includes('session has expired')) {
@@ -1561,7 +1695,7 @@
 
     // ==================== Turnstile Token 获取器 ====================
     const TURNSTILE_SITE_KEY = '0x4AAAAAAAGD4gMGOTFnvupz';
-    const TURNSTILE_TOKEN_EXPIRE_TIME = 4 * 60 * 1000;  // Turnstile Token 过期时间（4分钟，毫秒）
+    const TURNSTILE_TOKEN_EXPIRE_TIME = 1 * 60 * 1000;  // Turnstile Token 过期时间（1分钟，毫秒）
     
     let turnstileTokenCache = null;  // Turnstile Token 缓存
     let turnstileTokenExpireTime = null;  // Turnstile Token 过期时间戳
@@ -1652,114 +1786,183 @@
         }
     }
 
-    // 刷新 Turnstile Token（重置 widget 以获取新 Token）
-    async function refreshTurnstileToken() {
+    // 刷新 Turnstile Token（重置 widget 以获取新 Token，带重试机制）
+    async function refreshTurnstileToken(maxRetries = 3) {
+        wsLog(`🔄 refreshTurnstileToken 被调用 (maxRetries=${maxRetries})`);
+        
         // 如果正在刷新，等待当前刷新完成
         if (isRefreshingToken && tokenRefreshPromise) {
-            wsLog('Token 正在刷新中，等待完成...');
-            return await tokenRefreshPromise;
-        }
-
-        if (!window.turnstile) {
-            wsWarn('Turnstile API 未加载，尝试重新初始化...');
-            await initTurnstileTokenGrabber();
-            if (!window.turnstile) {
-                wsError('❌ 无法加载 Turnstile API');
-                return null;
-            }
-        }
-
-        // 检查容器是否存在
-        const container = document.getElementById('stake-ws-turnstile-container');
-        if (!container) {
-            wsWarn('Turnstile 容器不存在，重新初始化...');
-            turnstileWidgetId = null;
-            await initTurnstileTokenGrabber();
-            if (!turnstileWidgetId) {
-                wsError('❌ 无法初始化 Turnstile widget');
-                return null;
-            }
-        }
-
-        // 如果 widget ID 无效，重新初始化
-        if (!turnstileWidgetId) {
-            wsWarn('Turnstile widget ID 无效，重新初始化...');
-            await initTurnstileTokenGrabber();
-            if (!turnstileWidgetId) {
-                wsError('❌ 无法获取 Turnstile widget ID');
-                return null;
-            }
-        }
-
-        isRefreshingToken = true;
-        wsLog('🔄 开始刷新 Turnstile Token...');
-        
-        // 创建刷新 Promise
-        tokenRefreshPromise = new Promise((resolve) => {
+            wsLog('⏳ Token 正在刷新中，等待当前刷新完成...');
             try {
-                // 尝试重置 widget
-                window.turnstile.reset(turnstileWidgetId);
+                const result = await tokenRefreshPromise;
+                wsLog('✅ 等待刷新完成，返回结果');
+                return result;
             } catch (e) {
-                // 如果 reset 失败（例如 widget 不存在），尝试重新初始化
-                wsWarn('⚠️ Reset 失败，尝试重新初始化 widget:', e.message);
-                turnstileWidgetId = null;
-                turnstileTokenCache = null;
+                wsWarn('⚠️ 等待刷新时出错，将继续执行新的刷新:', e);
+                // 继续执行，不阻塞
+            }
+        }
+
+        wsLog(`🚀 开始执行 refreshTurnstileToken (将重试最多 ${maxRetries} 次)`);
+        let lastError = null;
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                if (!window.turnstile) {
+                    wsWarn(`Turnstile API 未加载，尝试重新初始化... (尝试 ${attempt}/${maxRetries})`);
+                    await initTurnstileTokenGrabber();
+                    if (!window.turnstile) {
+                        lastError = '无法加载 Turnstile API';
+                        if (attempt < maxRetries) {
+                            await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+                            continue;
+                        }
+                        wsError('❌ 无法加载 Turnstile API');
+                        return null;
+                    }
+                }
+
+                // 检查容器是否存在
+                let container = document.getElementById('stake-ws-turnstile-container');
+                if (!container) {
+                    wsWarn(`Turnstile 容器不存在，重新初始化... (尝试 ${attempt}/${maxRetries})`);
+                    turnstileWidgetId = null;
+                    await initTurnstileTokenGrabber();
+                    container = document.getElementById('stake-ws-turnstile-container');
+                    if (!container || !turnstileWidgetId) {
+                        lastError = '无法初始化 Turnstile widget';
+                        if (attempt < maxRetries) {
+                            await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+                            continue;
+                        }
+                        wsError('❌ 无法初始化 Turnstile widget');
+                        return null;
+                    }
+                }
+
+                // 如果 widget ID 无效，重新初始化
+                if (!turnstileWidgetId) {
+                    wsWarn(`Turnstile widget ID 无效，重新初始化... (尝试 ${attempt}/${maxRetries})`);
+                    await initTurnstileTokenGrabber();
+                    if (!turnstileWidgetId) {
+                        lastError = '无法获取 Turnstile widget ID';
+                        if (attempt < maxRetries) {
+                            await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+                            continue;
+                        }
+                        wsError('❌ 无法获取 Turnstile widget ID');
+                        return null;
+                    }
+                }
+
+                isRefreshingToken = true;
+                wsLog(`🔄 开始刷新 Turnstile Token... (尝试 ${attempt}/${maxRetries})`);
                 
-                // 重新初始化
-                initTurnstileTokenGrabber().then(() => {
-                    // 等待新 widget 生成 Turnstile Token
+                // 创建刷新 Promise
+                tokenRefreshPromise = new Promise((resolve) => {
+                    try {
+                        // 尝试重置 widget
+                        wsLog(`🔄 调用 window.turnstile.reset(${turnstileWidgetId})`);
+                        window.turnstile.reset(turnstileWidgetId);
+                        wsLog('✅ reset 调用成功，等待新 Token 生成...');
+                    } catch (e) {
+                        // 如果 reset 失败（例如 widget 不存在），尝试重新初始化
+                        wsWarn(`⚠️ Reset 失败，尝试重新初始化 widget: ${e.message}`);
+                        turnstileWidgetId = null;
+                        turnstileTokenCache = null;
+                        window.__TURNSTILETOKEN__ = null;
+                        
+                        // 重新初始化
+                        wsLog('🔄 开始重新初始化 widget...');
+                        initTurnstileTokenGrabber().then(() => {
+                            wsLog('✅ 重新初始化完成，等待新 Token...');
+                            // 等待新 widget 生成 Turnstile Token
+                            const checkInterval = setInterval(() => {
+                                if (turnstileTokenCache) {
+                                    clearInterval(checkInterval);
+                                    isRefreshingToken = false;
+                                    tokenRefreshPromise = null;
+                                    wsLog('✅ Turnstile Token 通过重新初始化获取成功');
+                                    resolve(turnstileTokenCache);
+                                }
+                            }, 500);
+                            
+                            // 15 秒超时
+                            setTimeout(() => {
+                                clearInterval(checkInterval);
+                                if (!turnstileTokenCache) {
+                                    isRefreshingToken = false;
+                                    tokenRefreshPromise = null;
+                                    wsWarn('⚠️ 重新初始化后 Turnstile Token 获取超时');
+                                    resolve(null);
+                                }
+                            }, 15000);
+                        }).catch(err => {
+                            wsError('❌ 重新初始化失败:', err);
+                            isRefreshingToken = false;
+                            tokenRefreshPromise = null;
+                            resolve(null);
+                        });
+                        return;
+                    }
+                    
+                    // 等待新 Turnstile Token 生成（最多等待 15 秒）
+                    wsLog('⏳ 等待 widget callback 生成新 Token...');
                     const checkInterval = setInterval(() => {
                         if (turnstileTokenCache) {
                             clearInterval(checkInterval);
                             isRefreshingToken = false;
                             tokenRefreshPromise = null;
-                            wsLog('✅ Turnstile Token 通过重新初始化获取成功');
+                            wsLog('✅ 检测到新 Token，刷新成功');
                             resolve(turnstileTokenCache);
                         }
                     }, 500);
                     
-                    // 10 秒超时
+                    // 15 秒超时
                     setTimeout(() => {
                         clearInterval(checkInterval);
                         if (!turnstileTokenCache) {
                             isRefreshingToken = false;
                             tokenRefreshPromise = null;
-                            wsError('❌ 重新初始化后 Turnstile Token 获取超时');
+                            wsWarn('⚠️ Turnstile Token 刷新超时（15秒内未生成）');
                             resolve(null);
                         }
-                    }, 10000);
-                }).catch(err => {
-                    wsError('❌ 重新初始化失败:', err);
-                    isRefreshingToken = false;
-                    tokenRefreshPromise = null;
-                    resolve(null);
+                    }, 15000);
                 });
-                return;
-            }
-            
-            // 等待新 Turnstile Token 生成（最多等待 10 秒）
-            const checkInterval = setInterval(() => {
-                if (turnstileTokenCache) {
-                    clearInterval(checkInterval);
-                    isRefreshingToken = false;
-                    tokenRefreshPromise = null;
-                    resolve(turnstileTokenCache);
-                }
-            }, 500);
-            
-            // 10 秒超时
-            setTimeout(() => {
-                clearInterval(checkInterval);
-                if (!turnstileTokenCache) {
-                    isRefreshingToken = false;
-                    tokenRefreshPromise = null;
-                    wsError('❌ Turnstile Token 刷新超时');
-                    resolve(null);
-                }
-            }, 10000);
-        });
+                
+                const refreshResult = await tokenRefreshPromise;
 
-        return await tokenRefreshPromise;
+                if (refreshResult) {
+                    tokenRefreshPromise = null;
+                    return refreshResult;
+                } else {
+                    lastError = 'Turnstile Token 刷新超时';
+                    if (attempt < maxRetries) {
+                        wsWarn(`⚠️ 刷新失败，${1000 * attempt}ms 后重试... (尝试 ${attempt}/${maxRetries})`);
+                        // 清空状态以便重试
+                        turnstileTokenCache = null;
+                        turnstileTokenExpireTime = null;
+                        window.__TURNSTILETOKEN__ = null;
+                        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+                        continue;
+                    }
+                }
+            } catch (e) {
+                lastError = e.message;
+                wsError(`❌ 刷新 Turnstile Token 异常 (尝试 ${attempt}/${maxRetries}):`, e);
+                if (attempt < maxRetries) {
+                    turnstileTokenCache = null;
+                    turnstileTokenExpireTime = null;
+                    window.__TURNSTILETOKEN__ = null;
+                    await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+                }
+            } finally {
+                isRefreshingToken = false;
+                tokenRefreshPromise = null;
+            }
+        }
+
+        wsError(`❌ Turnstile Token 刷新失败（已重试 ${maxRetries} 次）: ${lastError}`);
+        return null;
     }
 
     // ==================== 获取 Turnstile Token ====================

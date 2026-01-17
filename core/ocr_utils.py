@@ -19,6 +19,23 @@ OPENAI_MODEL = 'gpt-4o'
 OCR_API_URL = None
 OCR_API_TOKEN = None
 
+# 服务器 Cloudflare Clearance Token（服务启动时获取）
+SERVER_CF_CLEARANCE = None
+# 服务器 User-Agent（服务启动时获取，与 cf_clearance 一起获取）
+SERVER_USER_AGENT = None
+
+
+def set_server_cf_clearance(cf_clearance):
+    """设置服务器 Cloudflare Clearance Token"""
+    global SERVER_CF_CLEARANCE
+    SERVER_CF_CLEARANCE = cf_clearance
+
+
+def set_server_user_agent(user_agent):
+    """设置服务器 User-Agent"""
+    global SERVER_USER_AGENT
+    SERVER_USER_AGENT = user_agent
+
 
 def set_ocr_config(api_key=None, api_base_url=None, model=None, ocr_api_url=None, ocr_api_token=None):
     """设置 OCR 配置"""
@@ -385,3 +402,165 @@ def recognize_code_with_ocr_api(image_path=None, image_base64=None):
         logger.error(f"❌ OCR API 识别失败: {e}", exc_info=True)
         return None
 
+
+def query_code_simple(target_code):
+    """
+    简单的代码查询方法（用于验证 OCR 识别结果）
+    使用硬编码的请求头和 Cookie，动态替换代码
+    使用 curl-requests 来模拟浏览器 TLS 指纹，绕过 Cloudflare 检测
+    
+    Args:
+        target_code: 要查询的代码
+    
+    Returns:
+        tuple: (is_not_found, response_data)
+            - is_not_found: bool，True 表示代码不存在（需要二次识别）
+            - response_data: dict，响应数据（如果成功）
+    """
+    # 使用 curl_cffi 来模拟浏览器 TLS 指纹，绕过 Cloudflare 检测
+    from curl_cffi import requests
+    
+    try:
+        # 使用服务器启动时获取的 User-Agent（如果存在），否则使用硬编码值
+        user_agent = SERVER_USER_AGENT if SERVER_USER_AGENT else "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
+        
+        # 硬编码的请求头（参考 worker.py 的格式）
+        headers = {
+            "accept": "*/*",
+            "content-type": "application/json",
+            "origin": "https://stake.com",
+            "user-agent": user_agent,
+            "referer": f"https://stake.com/zh/settings/offers?currency=usdt&type=drop&code={target_code}&modal=redeemBonus",
+            "x-operation-name": "BonusCodeInformation",
+            "x-access-token": "68a8f427275596ca5d8858f407c08e2e5376a19329c46338daa995d1d0cbf37e4766a0e2862feffbae2ab3f481271e9d",
+        }
+        
+        # 使用服务器启动时获取的 cf_clearance token（必须存在，不使用默认值）
+        if not SERVER_CF_CLEARANCE:
+            logger.error("❌ 服务器 cf_clearance Token 未设置，无法查询代码")
+            return False, None
+        
+        cookie_string = f"cf_clearance={SERVER_CF_CLEARANCE}"
+        cookies = {}
+        for item in cookie_string.split(';'):
+            if '=' in item:
+                key, value = item.strip().split('=', 1)
+                cookies[key] = value
+        
+        # 构建请求体（动态替换代码）
+        payload = {
+            "query": "query BonusCodeInformation($code: String!, $couponType: CouponType!) {\n  bonusCodeInformation(code: $code, couponType: $couponType) {\n    availabilityStatus\n    bonusValue\n    cryptoMultiplier\n  }\n}",
+            "variables": {
+                "code": target_code,
+                "couponType": "drop"
+            }
+        }
+        
+        # 构建代理配置（使用与 get_server_cf_clearance 相同的代理）
+        from urllib.parse import quote
+        server_proxy = "isp.decodo.com:10003:spoigpsfuo:xkp5JeXPk3Ly+tn92h"
+        proxy_parts = server_proxy.split(':')
+        if len(proxy_parts) >= 4:
+            proxy_host = proxy_parts[0]
+            proxy_port = int(proxy_parts[1])
+            proxy_user = proxy_parts[2]
+            proxy_pass = ':'.join(proxy_parts[3:])  # 密码可能包含冒号
+            encoded_username = quote(proxy_user, safe='')
+            encoded_password = quote(proxy_pass, safe='')
+            proxy_url = f"http://{encoded_username}:{encoded_password}@{proxy_host}:{proxy_port}"
+            proxies = {"http": proxy_url, "https": proxy_url}
+        else:
+            proxies = None
+            logger.warning("⚠️ 代理地址格式错误，将不使用代理")
+        
+        # 发送请求
+        url = "https://stake.com/_api/graphql"
+        logger.info(f"🔍 查询代码验证: {target_code}")
+        
+        # 使用 curl_cffi 的 impersonate 参数模拟 Chrome 浏览器 TLS 指纹
+        response = requests.post(
+            url,
+            headers=headers,
+            cookies=cookies,
+            json=payload,
+            proxies=proxies,
+            timeout=10,
+            impersonate='chrome110'  # 模拟 Chrome 浏览器 TLS 指纹
+        )
+        
+        # 解析响应
+        if response.status_code != 200:
+            # 构建 curl 命令
+            import json as json_module
+            
+            # 构建 headers（过滤空值）
+            header_list = []
+            for k, v in headers.items():
+                if k and v:
+                    # 转义单引号
+                    escaped_value = str(v).replace("'", "'\\''")
+                    header_list.append(f"-H '{k}: {escaped_value}'")
+            curl_headers = ' \\\n  '.join(header_list)
+            
+            # 构建 cookies
+            cookie_list = []
+            for k, v in cookies.items():
+                escaped_value = str(v).replace("'", "'\\''")
+                cookie_list.append(f"-b '{k}={escaped_value}'")
+            curl_cookies = ' \\\n  '.join(cookie_list)
+            
+            # 构建 JSON 数据
+            curl_data = json_module.dumps(payload, ensure_ascii=False, indent=2).replace("'", "'\\''")
+            
+            curl_command = f"curl -X POST '{url}' \\\n  {curl_headers} \\\n  {curl_cookies} \\\n  -d '{curl_data}'"
+            
+            # 打印详细信息
+            logger.error(f"⚠️ 查询接口返回非 200 状态码: {response.status_code}")
+            logger.error(f"📋 完整 curl 命令:\n{curl_command}")
+            logger.error(f"📥 响应状态码: {response.status_code}")
+            logger.error(f"📥 响应头: {json_module.dumps(dict(response.headers), ensure_ascii=False, indent=2)}")
+            try:
+                response_text = response.text
+                logger.error(f"📥 响应内容:\n{response_text}")
+            except Exception as e:
+                logger.error(f"📥 无法读取响应内容: {e}")
+            return False, None
+        
+        response_data = response.json()
+        
+        # 检查是否有错误（代码不存在）
+        # 格式：{"errors": [{"errorType": "notFound", ...}], "data": null}
+        errors = response_data.get('errors', [])
+        if errors:
+            error_type = errors[0].get('errorType', '')
+            error_message = errors[0].get('message', '')
+            if error_type == 'notFound' or '未找到或不可用' in error_message or 'not found' in error_message.lower():
+                logger.info(f"❌ 代码不存在（errorType: {error_type}）: {target_code}")
+                return True, response_data  # is_not_found = True
+        
+        # 检查 data 是否为 null
+        data = response_data.get('data')
+        if data is None:
+            # 如果 data 为 null 且有 errors，已经在上面处理了
+            # 如果没有 errors 但 data 为 null，也可能是代码不存在
+            if errors:
+                logger.info(f"❌ 代码不存在（data 为 null，已有 errors）: {target_code}")
+            else:
+                logger.info(f"❌ 代码不存在（data 为 null，无 errors）: {target_code}")
+            return True, response_data  # is_not_found = True
+        
+        # 检查 availabilityStatus（如果 data 不为 null）
+        bonus_code_info = data.get('bonusCodeInformation')
+        if bonus_code_info:
+            status = bonus_code_info.get('availabilityStatus')
+            if status == 'notFound':
+                logger.info(f"❌ 代码不存在（availabilityStatus: notFound）: {target_code}")
+                return True, response_data  # is_not_found = True
+        
+        # 代码存在（或其他状态）
+        logger.info(f"✅ 代码验证通过（不需要二次识别）: {target_code}")
+        return False, response_data  # is_not_found = False
+        
+    except Exception as e:
+        logger.error(f"❌ 查询代码失败: {e}", exc_info=True)
+        return False, None  # 查询失败，不触发二次识别

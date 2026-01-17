@@ -159,11 +159,12 @@ for logger_name in django_loggers:
 
 # 目标频道列表
 target_channels = [
-    -1001738096535,
-    -1001977383442,
-    -1003315955015,
-    -1002032779602,
-    -1002140237447,  # 新添加的频道，使用 code_format_parser
+    -1001738096535,  # RainsTEAM
+    -1001977383442,  # daily
+    -1003315955015,  # 测试频道
+    -1002032779602,  # HighRollersStake
+    -1002140237447,  # FC频道，使用 code_format_parser
+    -1003538327109,  # 补码频道，使用 code_format_parser
 ]
 
 # 核心频道列表（用于 openChat 优化，提高更新优先级）
@@ -178,7 +179,8 @@ channel_id_map = {
     -1001977383442: 'daily_code_parser',    # daily
     -1003315955015: 'daily_code_parser',    # stake_cn_chat_room
     -1001738096535: 'rains_team_parser',    # RainsTEAM
-    -1002140237447: 'code_format_parser',   # 新频道，解析 Code: stakecode 格式
+    -1002140237447: 'code_format_parser',   # FC频道，解析 Code: stakecode 格式
+    -1003538327109: 'code_format_parser',   # 补码频道，解析 Code: stakecode 格式
 }
 
 # 频道名称映射（用于日志输出）
@@ -187,7 +189,8 @@ channel_name_map = {
     -1001977383442: 'daily_drop',       # daily
     -1003315955015: '测试频道',          # stake_cn_chat_room
     -1001738096535: '周奖频道',          # RainsTEAM
-    -1002140237447: 'FC频道',            # 新频道
+    -1002140237447: 'FC频道',            # FC频道
+    -1003538327109: '补码频道',          # 补码频道
 }
 
 # 代码转发目标频道
@@ -334,7 +337,7 @@ def process_message_async(update):
 
         parser_name = channel_id_map.get(chat_id, 'default_parser')
         parser_func = CODE_PARSERS.get(parser_name, parse_code_default)
-        TEST_USERNAMES = ['yzjjdcf', 'hk888888']
+        TEST_USERNAMES = ['yzjjdcf']
         is_test_channel = (chat_id == TEST_CHANNEL_ID)
         FC_CHANNEL_ID = -1002140237447
         is_fc_channel = (chat_id == FC_CHANNEL_ID)
@@ -352,6 +355,37 @@ def process_message_async(update):
             message_datetime = datetime.fromtimestamp(message_date)
             delay_seconds = (update_received_time - message_datetime).total_seconds()
             delay_ms = int(delay_seconds * 1000)
+        
+        # 定义发送代码的函数（用于二次识别后的发送）
+        def send_code_via_websocket(code_to_send):
+            """通过 WebSocket 发送代码给客户端"""
+            try:
+                server_time = datetime.now()
+                server_timestamp_ms = int(server_time.timestamp() * 1000)
+                message_data = {
+                    'type': 'code_detected',
+                    'code': code_to_send,
+                    'channel_id': chat_id,
+                    'channel_title': channel_name,
+                    'parser': parser_name,
+                    'timestamp': server_time.isoformat(),
+                    'server_timestamp_ms': server_timestamp_ms,
+                    'message_received_time': time.perf_counter(),
+                    'is_retry': True  # 标记为二次识别
+                }
+                
+                filter_usernames = TEST_USERNAMES if is_test_channel else None
+                ws_loop = get_websocket_loop()
+                if ws_loop and ws_loop.is_running():
+                    asyncio.run_coroutine_threadsafe(
+                        broadcast_to_clients(message_data, filter_usernames=filter_usernames),
+                        ws_loop
+                    )
+                else:
+                    Thread(target=lambda: asyncio.run(broadcast_to_clients(message_data, filter_usernames=filter_usernames)), daemon=True).start()
+                logger.info(f"📤 二次识别代码已发送: {code_to_send}")
+            except Exception as e:
+                logger.error(f"❌ 发送二次识别代码失败: {e}")
         
         # 视频解析（如果需要）
         if not code:
@@ -375,7 +409,8 @@ def process_message_async(update):
                                 raw_text,
                                 message=dummy_msg,
                                 has_video=True,
-                                download_func=lambda m: video_path
+                                download_func=lambda m: video_path,
+                                send_code_callback=send_code_via_websocket
                             )
                         )
             else:
@@ -1006,6 +1041,33 @@ async def start_websocket_server():
 
 
 if __name__ == "__main__":
+    # 在启动时获取服务器 Cloudflare Clearance Token
+    def init_server_cf_clearance():
+        """在后台线程中获取服务器 cf_clearance token 和 userAgent"""
+        try:
+            from get_server_cf_clearance import get_server_cf_clearance
+            from ocr_utils import set_server_cf_clearance, set_server_user_agent
+            
+            logger.info("🔐 开始获取服务器 Cloudflare Clearance Token...")
+            cf_clearance, user_agent = get_server_cf_clearance()
+            if cf_clearance:
+                set_server_cf_clearance(cf_clearance)
+                logger.info("✅ 服务器 cf_clearance Token 已设置")
+                if user_agent:
+                    set_server_user_agent(user_agent)
+                    logger.info("✅ 服务器 User-Agent 已设置")
+                else:
+                    logger.warning("⚠️ 未获取到 User-Agent，将使用硬编码值")
+            else:
+                logger.warning("⚠️ 获取服务器 cf_clearance Token 失败")
+        except Exception as e:
+            logger.error(f"❌ 初始化服务器 cf_clearance Token 失败: {e}", exc_info=True)
+    
+    # 在后台线程中获取 cf_clearance（不阻塞主流程）
+    cf_thread = Thread(target=init_server_cf_clearance, daemon=True)
+    cf_thread.start()
+    logger.info("🔐 已启动后台线程获取服务器 cf_clearance Token")
+    
     # 启动 WebSocket 服务器（在后台线程）
     def run_websocket_server():
         """在独立线程中运行 WebSocket 服务器"""
