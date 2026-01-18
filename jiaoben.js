@@ -1612,7 +1612,7 @@
                         errorStatus = '代码已失效';
                     } else if (errorType === 'disabledSession' || errorMsg.includes('session has expired')) {
                         errorStatus = '会话已过期，请刷新页面';
-                    } else if (errorType === 'codeAlreadyClaimed' || errorMsg.includes('already claimed')) {
+                    } else if (errorType === 'codeAlreadyClaimed' || errorType === 'already_claimed' || errorMsg.includes('already claimed') || errorMsg.includes('already_claimed')) {
                         errorStatus = '已领取过';
                     } else if (errorType === 'weeklyWagerRequirement' || errorMsg.includes('not played enough') || errorMsg.includes('wager requirement')) {
                         errorStatus = '周投注额不足';
