@@ -165,6 +165,8 @@ target_channels = [
     -1002032779602,  # HighRollersStake
     -1002140237447,  # FC频道，使用 code_format_parser
     -1003538327109,  # 补码频道，使用 code_format_parser
+    -1002493460363,  # private_code，使用 rains_team_parser
+    -1002252848959,  # fast_code，使用 code_format_parser
 ]
 
 # 核心频道列表（用于 openChat 优化，提高更新优先级）
@@ -181,6 +183,8 @@ channel_id_map = {
     -1001738096535: 'rains_team_parser',    # RainsTEAM
     -1002140237447: 'code_format_parser',   # FC频道，解析 Code: stakecode 格式
     -1003538327109: 'code_format_parser',   # 补码频道，解析 Code: stakecode 格式
+    -1002493460363: 'rains_team_parser',    # private_code，使用 rains_team_parser
+    -1002252848959: 'code_format_parser',    # fast_code，使用 code_format_parser
 }
 
 # 频道名称映射（用于日志输出）
@@ -191,6 +195,8 @@ channel_name_map = {
     -1001738096535: '周奖频道',          # RainsTEAM
     -1002140237447: 'FC频道',            # FC频道
     -1003538327109: '补码频道',          # 补码频道
+    -1002493460363: 'private_code',     # private_code
+    -1002252848959: 'fast_code',        # fast_code
 }
 
 # 代码转发目标频道
@@ -205,6 +211,7 @@ connected_clients = set()  # 存储所有连接的客户端
 client_username_map = {}  # 存储客户端 WebSocket 到 username 的映射 {websocket: username}
 client_addr_map = {}  # 存储客户端 WebSocket 到地址的映射 {websocket: (ip, port)}
 websocket_loop = None  # 存储 WebSocket 服务器的事件循环
+sent_codes = set()  # 存储已下发的代码（用于去重，避免重复下发）
 
 # 线程池执行器（用于异步处理消息，避免阻塞主线程）
 # 使用最多 4 个工作线程，避免过多线程导致资源竞争
@@ -358,8 +365,18 @@ def process_message_async(update):
         
         # 定义发送代码的函数（用于二次识别后的发送）
         def send_code_via_websocket(code_to_send):
-            """通过 WebSocket 发送代码给客户端"""
+            """通过 WebSocket 发送代码给客户端（带去重检查）"""
             try:
+                # 检查代码是否已下发过
+                if code_to_send in sent_codes:
+                    current_time = datetime.now()
+                    time_str = current_time.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                    logger.debug(f"[{time_str}] ⏭️ 代码已下发过，跳过: {code_to_send}")
+                    return
+                
+                # 添加到已下发集合
+                sent_codes.add(code_to_send)
+                
                 server_time = datetime.now()
                 server_timestamp_ms = int(server_time.timestamp() * 1000)
                 message_data = {
@@ -419,7 +436,17 @@ def process_message_async(update):
         if not code:
             return
         
-        # ✅ 第一时间发送给客户端（最高优先级）
+        # ✅ 第一时间发送给客户端（最高优先级，带去重检查）
+        # 检查代码是否已下发过
+        if code in sent_codes:
+            current_time = datetime.now()
+            time_str = current_time.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+            logger.debug(f"[{time_str}] ⏭️ 代码已下发过，跳过: {code} (来源: {channel_name})")
+            return
+        
+        # 添加到已下发集合
+        sent_codes.add(code)
+        
         server_time = datetime.now()
         server_timestamp_ms = int(server_time.timestamp() * 1000)
         message_data = {

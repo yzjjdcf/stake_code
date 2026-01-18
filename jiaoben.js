@@ -1330,25 +1330,25 @@
                 }
             }
             
-            // 方式3: 从 localStorage 中获取
-            for (let key of Object.keys(localStorage)) {
-                if (key.toLowerCase().includes('user') && !key.toLowerCase().includes('token')) {
-                    const value = localStorage.getItem(key);
-                    if (isValidUsername(value)) {
-                        wsLog('从 localStorage 中提取到用户名:', value);
-                        return value;
-                    }
+            // 方式3: 从 window 全局对象中获取（如果 Stake 页面有暴露）
+            try {
+                if (window.__STAKE_USER__ && window.__STAKE_USER__.name && isValidUsername(window.__STAKE_USER__.name)) {
+                    wsLog('从 window.__STAKE_USER__ 中提取到用户名:', window.__STAKE_USER__.name);
+                    return window.__STAKE_USER__.name;
                 }
+                if (window.stakeUser && window.stakeUser.name && isValidUsername(window.stakeUser.name)) {
+                    wsLog('从 window.stakeUser 中提取到用户名:', window.stakeUser.name);
+                    return window.stakeUser.name;
+                }
+                if (window.user && window.user.name && isValidUsername(window.user.name)) {
+                    wsLog('从 window.user 中提取到用户名:', window.user.name);
+                    return window.user.name;
+                }
+            } catch (e) {
+                // 忽略访问 window 属性的错误
             }
             
-            // 方式4: 从 URL 或页面标题中提取
-            const urlMatch = window.location.href.match(/\/user\/([^\/]+)/);
-            if (urlMatch && isValidUsername(urlMatch[1])) {
-                wsLog('从 URL 中提取到用户名:', urlMatch[1]);
-                return urlMatch[1];
-            }
-            
-            // 方式5: 从所有 script 标签中搜索用户名（备用方案）
+            // 方式4: 从所有 script 标签中搜索用户名（备用方案）
             const allScripts = document.querySelectorAll('script');
             for (const script of allScripts) {
                 const content = script.textContent || script.innerHTML;
