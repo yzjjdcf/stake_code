@@ -137,3 +137,8 @@ USE_TZ = False
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+
+# Data upload limits
+# 增加 POST/GET 参数字段数量限制（用于 Django Admin 大量数据筛选）
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 10000  # 默认是 1000，增加到 10000
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10485760  # 10MB（默认是 2621440，即 2.5MB）

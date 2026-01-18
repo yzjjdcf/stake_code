@@ -365,17 +365,18 @@ def process_message_async(update):
         
         # 定义发送代码的函数（用于二次识别后的发送）
         def send_code_via_websocket(code_to_send):
-            """通过 WebSocket 发送代码给客户端（带去重检查）"""
+            """通过 WebSocket 发送代码给客户端（带去重检查，测试频道不做去重）"""
             try:
-                # 检查代码是否已下发过
-                if code_to_send in sent_codes:
-                    current_time = datetime.now()
-                    time_str = current_time.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-                    logger.debug(f"[{time_str}] ⏭️ 代码已下发过，跳过: {code_to_send}")
-                    return
-                
-                # 添加到已下发集合
-                sent_codes.add(code_to_send)
+                # 检查代码是否已下发过（测试频道不做去重）
+                if not is_test_channel:
+                    if code_to_send in sent_codes:
+                        current_time = datetime.now()
+                        time_str = current_time.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                        logger.debug(f"[{time_str}] ⏭️ 代码已下发过，跳过: {code_to_send}")
+                        return
+                    
+                    # 添加到已下发集合
+                    sent_codes.add(code_to_send)
                 
                 server_time = datetime.now()
                 server_timestamp_ms = int(server_time.timestamp() * 1000)
@@ -416,20 +417,21 @@ def process_message_async(update):
                             pass
                         dummy_msg = DummyMessage()
                         dummy_msg.file_path = video_path
+                        # 在线程池中运行时，创建新的事件循环（避免与 WebSocket 循环冲突）
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
                         try:
-                            loop = asyncio.get_event_loop()
-                        except RuntimeError:
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                        code = loop.run_until_complete(
-                            parse_code_daily_code_async(
-                                raw_text,
-                                message=dummy_msg,
-                                has_video=True,
-                                download_func=lambda m: video_path,
-                                send_code_callback=send_code_via_websocket
+                            code = loop.run_until_complete(
+                                parse_code_daily_code_async(
+                                    raw_text,
+                                    message=dummy_msg,
+                                    has_video=True,
+                                    download_func=lambda m: video_path,
+                                    send_code_callback=send_code_via_websocket
+                                )
                             )
-                        )
+                        finally:
+                            loop.close()
             else:
                 code = parser_func(raw_text)
 
@@ -437,15 +439,16 @@ def process_message_async(update):
             return
         
         # ✅ 第一时间发送给客户端（最高优先级，带去重检查）
-        # 检查代码是否已下发过
-        if code in sent_codes:
-            current_time = datetime.now()
-            time_str = current_time.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-            logger.debug(f"[{time_str}] ⏭️ 代码已下发过，跳过: {code} (来源: {channel_name})")
-            return
-        
-        # 添加到已下发集合
-        sent_codes.add(code)
+        # 检查代码是否已下发过（测试频道不做去重）
+        if not is_test_channel:
+            if code in sent_codes:
+                current_time = datetime.now()
+                time_str = current_time.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                logger.debug(f"[{time_str}] ⏭️ 代码已下发过，跳过: {code} (来源: {channel_name})")
+                return
+            
+            # 添加到已下发集合
+            sent_codes.add(code)
         
         server_time = datetime.now()
         server_timestamp_ms = int(server_time.timestamp() * 1000)
@@ -1211,7 +1214,7 @@ if __name__ == "__main__":
             logger.info("✅ 已预加载对话列表")
         except Exception as e:
             logger.warning(f"⚠️ 预加载对话失败: {e}")
-        
+
         # 初始化时打开核心频道（拉活）
         keep_alive_with_openchat()
 
