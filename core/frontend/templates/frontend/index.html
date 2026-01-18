@@ -1,0 +1,189 @@
+{% extends 'frontend/base.html' %}
+
+{% block title %}Stake Code Claim Tool - 首页{% endblock %}
+
+{% block extra_css %}
+<style>
+    .hero-section {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 80px 0;
+        margin: -2rem -15px 60px -15px; /* 突破 container 限制 */
+        width: calc(100% + 30px);
+    }
+    @media (min-width: 576px) {
+        .hero-section {
+            margin-left: calc(-50vw + 50%);
+            margin-right: calc(-50vw + 50%);
+            width: 100vw;
+        }
+    }
+    .feature-card {
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+        height: 100%;
+    }
+    .feature-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+    }
+    .feature-icon {
+        font-size: 3rem;
+        color: #667eea;
+        margin-bottom: 1rem;
+    }
+    .cta-section {
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        color: white;
+        padding: 60px 0;
+        margin: 60px -15px -2rem -15px; /* 突破 container 限制 */
+        width: calc(100% + 30px);
+    }
+    @media (min-width: 576px) {
+        .cta-section {
+            margin-left: calc(-50vw + 50%);
+            margin-right: calc(-50vw + 50%);
+            width: 100vw;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Hero 区域 -->
+<div class="hero-section">
+    <div class="container text-center">
+        <div class="row justify-content-center">
+            <div class="col-lg-8">
+                <h1 class="display-4 fw-bold mb-4">
+                    <i class="bi bi-gift-fill"></i> Stake Code Claim Tool
+                </h1>
+                <p class="lead mb-4">
+                    自动化代码领取解决方案，让您的代码领取更加高效便捷
+                </p>
+                <div class="d-flex gap-3 justify-content-center flex-wrap">
+                    <a href="{% url 'frontend:login' %}" class="btn btn-light btn-lg">
+                        <i class="bi bi-box-arrow-in-right"></i> 立即登录
+                    </a>
+                    <a href="{% url 'frontend:register' %}" class="btn btn-outline-light btn-lg">
+                        <i class="bi bi-person-plus"></i> 免费注册
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 功能特点 -->
+<div class="container mb-5">
+    <div class="text-center mb-5">
+        <h2 class="display-5 fw-bold">核心功能</h2>
+        <p class="text-muted">强大的功能，简单易用</p>
+    </div>
+    
+    <div class="row g-4">
+        <div class="col-md-4">
+            <div class="card feature-card shadow-sm border-0">
+                <div class="card-body text-center p-4">
+                    <div class="feature-icon">
+                        <i class="bi bi-lightning-charge-fill"></i>
+                    </div>
+                    <h4 class="card-title fw-bold">极速领取</h4>
+                    <p class="card-text text-muted">
+                        实时监听代码发布，第一时间自动领取，速度更快，成功率更高
+                    </p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-4">
+            <div class="card feature-card shadow-sm border-0">
+                <div class="card-body text-center p-4">
+                    <div class="feature-icon">
+                        <i class="bi bi-shield-check-fill"></i>
+                    </div>
+                    <h4 class="card-title fw-bold">稳定可靠</h4>
+                    <p class="card-text text-muted">
+                        7x24小时稳定运行，自动重连，智能错误处理，确保服务不间断
+                    </p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-4">
+            <div class="card feature-card shadow-sm border-0">
+                <div class="card-body text-center p-4">
+                    <div class="feature-icon">
+                        <i class="bi bi-people-fill"></i>
+                    </div>
+                    <h4 class="card-title fw-bold">多账号管理</h4>
+                    <p class="card-text text-muted">
+                        轻松管理多个账号，统一控制，灵活配置，一个平台搞定所有账号
+                    </p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-4">
+            <div class="card feature-card shadow-sm border-0">
+                <div class="card-body text-center p-4">
+                    <div class="feature-icon">
+                        <i class="bi bi-bar-chart-fill"></i>
+                    </div>
+                    <h4 class="card-title fw-bold">实时统计</h4>
+                    <p class="card-text text-muted">
+                        详细的领取记录和统计数据，清晰了解每次领取的详情和结果
+                    </p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-4">
+            <div class="card feature-card shadow-sm border-0">
+                <div class="card-body text-center p-4">
+                    <div class="feature-icon">
+                        <i class="bi bi-wallet2-fill"></i>
+                    </div>
+                    <h4 class="card-title fw-bold">余额管理</h4>
+                    <p class="card-text text-muted">
+                        预充值模式，按次扣费，余额透明，账单清晰，随时查看消费明细
+                    </p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-4">
+            <div class="card feature-card shadow-sm border-0">
+                <div class="card-body text-center p-4">
+                    <div class="feature-icon">
+                        <i class="bi bi-gear-fill"></i>
+                    </div>
+                    <h4 class="card-title fw-bold">灵活配置</h4>
+                    <p class="card-text text-muted">
+                        个性化费率设置，根据需求灵活调整，满足不同用户的使用场景
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- CTA 区域 -->
+<div class="cta-section">
+    <div class="container text-center">
+        <div class="row justify-content-center">
+            <div class="col-lg-8">
+                <h2 class="display-5 fw-bold mb-4">准备开始了吗？</h2>
+                <p class="lead mb-4">立即注册，开启您的自动化代码领取之旅</p>
+                <div class="d-flex gap-3 justify-content-center flex-wrap">
+                    <a href="{% url 'frontend:register' %}" class="btn btn-light btn-lg">
+                        <i class="bi bi-person-plus"></i> 免费注册
+                    </a>
+                    <a href="{% url 'frontend:login' %}" class="btn btn-outline-light btn-lg">
+                        <i class="bi bi-box-arrow-in-right"></i> 已有账号？立即登录
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,113 @@
+{% extends 'frontend/base.html' %}
+
+{% block title %}账单查询 - Stake Code Claim Tool{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-receipt"></i> 账单查询</h2>
+    <div>
+        <span class="badge bg-primary">总计: {{ total_count }}</span>
+        <span class="badge bg-success ms-2">成功: {{ success_count }}</span>
+    </div>
+</div>
+
+<div class="card shadow">
+    <div class="card-body">
+        {% if page_obj %}
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead class="table-light">
+                    <tr>
+                        <th>时间</th>
+                        <th>代码</th>
+                        <th>账号</th>
+                        <th>状态</th>
+                        <th>奖金</th>
+                        <th>响应时间</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for record in page_obj %}
+                    <tr>
+                        <td>{{ record.created_at|date:"Y-m-d H:i:s" }}</td>
+                        <td><code>{{ record.code }}</code></td>
+                        <td>{{ record.username|default:"-" }}</td>
+                        <td>
+                            <span class="badge 
+                                {% if record.status == 'claim_success' %}bg-success
+                                {% elif record.status == 'claim_failure' %}bg-danger
+                                {% elif record.status == 'inactive' %}bg-warning
+                                {% elif record.status == 'not_found' %}bg-secondary
+                                {% else %}bg-info
+                                {% endif %}">
+                                {{ record.get_status_display }}
+                            </span>
+                        </td>
+                        <td>
+                            {% if record.bonus_value %}
+                                {{ record.bonus_value }}
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if record.response_time_ms %}
+                                {{ record.response_time_ms }}ms
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        
+        <!-- 分页 -->
+        {% if page_obj.has_other_pages %}
+        <nav aria-label="分页导航">
+            <ul class="pagination justify-content-center">
+                {% if page_obj.has_previous %}
+                <li class="page-item">
+                    <a class="page-link" href="?page={{ page_obj.previous_page_number }}">上一页</a>
+                </li>
+                {% else %}
+                <li class="page-item disabled">
+                    <span class="page-link">上一页</span>
+                </li>
+                {% endif %}
+                
+                {% for num in page_obj.paginator.page_range %}
+                    {% if page_obj.number == num %}
+                    <li class="page-item active">
+                        <span class="page-link">{{ num }}</span>
+                    </li>
+                    {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ num }}">{{ num }}</a>
+                    </li>
+                    {% endif %}
+                {% endfor %}
+                
+                {% if page_obj.has_next %}
+                <li class="page-item">
+                    <a class="page-link" href="?page={{ page_obj.next_page_number }}">下一页</a>
+                </li>
+                {% else %}
+                <li class="page-item disabled">
+                    <span class="page-link">下一页</span>
+                </li>
+                {% endif %}
+            </ul>
+        </nav>
+        {% endif %}
+        {% else %}
+        <div class="text-center py-5">
+            <i class="bi bi-inbox" style="font-size: 3rem; color: #ccc;"></i>
+            <p class="text-muted mt-3">暂无账单记录</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+

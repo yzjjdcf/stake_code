@@ -14,7 +14,8 @@ from pathlib import Path
 import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
-# BASE_DIR 是 core/manager/ 目录，需要向上两级到项目根目录
+# BASE_DIR 是项目根目录（stake_code/）
+# settings.py 在 core/manager/settings.py，所以 parent = core/manager/, parent.parent = core/, parent.parent.parent = 项目根目录
 BASE_DIR = Path(__file__).resolve().parent.parent.parent  # 项目根目录
 
 
@@ -27,13 +28,21 @@ SECRET_KEY = 'django-insecure-=!mnjnimgbng&fv(nvyw9=3bxrp)ew*8&(71qj4__7a@6*ew63
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['stakefav.xyz', 'www.stakefav.xyz', '146.103.42.142', 'localhost', '127.0.0.1']  # 允许域名和IP访问
+# 生产环境允许的主机（域名和IP）
+# 建议只包含实际使用的域名和IP，不要使用 '*' 通配符
+ALLOWED_HOSTS = [
+    'stakefav.xyz',
+    'www.stakefav.xyz',
+    '146.103.42.142',
+    'localhost',
+    '127.0.0.1',
+]
 
 
 # Application definition
 
 INSTALLED_APPS = [
-    "jazzmin",  # 必须在 admin 之前（如果已安装 django-jazzmin）
+    "jazzmin",  # 必须在 admin 之前
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -63,7 +72,7 @@ ROOT_URLCONF = 'manager.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [BASE_DIR / 'frontend' / 'templates'],
+        'DIRS': [BASE_DIR / 'core' / 'frontend' / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -136,6 +145,7 @@ USE_TZ = False
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'  # 生产环境收集静态文件到此目录
 
 # Data upload limits
 # 增加 POST/GET 参数字段数量限制（用于 Django Admin 大量数据筛选）
@@ -145,3 +155,23 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 10485760  # 10MB（默认是 2621440，即 2.5MB�
 # 登录重定向配置
 LOGIN_URL = '/login/'
 LOGIN_REDIRECT_URL = '/'
+
+# CSRF 信任的源（允许来自这些域名的请求）
+CSRF_TRUSTED_ORIGINS = [
+    'https://stakefav.xyz',
+    'https://www.stakefav.xyz',
+]
+
+# 生产环境安全配置（使用 HTTPS 时启用）
+if not DEBUG:
+    # 如果 Nginx 设置了 X-Forwarded-Proto，需要信任代理头
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    
+    # Cookie 安全设置（HTTPS 时启用）
+    SESSION_COOKIE_SECURE = True  # 只通过 HTTPS 发送会话 Cookie
+    CSRF_COOKIE_SECURE = True      # 只通过 HTTPS 发送 CSRF Cookie
+    
+    # 其他安全设置
+    SECURE_BROWSER_XSS_FILTER = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    X_FRAME_OPTIONS = 'DENY'  # 防止点击劫持

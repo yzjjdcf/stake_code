@@ -68,7 +68,8 @@ start_django() {
     
     cd "$PROJECT_DIR/config" || exit 1
     # 使用 setsid 创建新会话，完全分离进程，避免输出显示在终端
-    setsid "$PYTHON" manage.py runserver 0.0.0.0:8000 >> "$DJANGO_LOG" 2>&1 < /dev/null &
+    # 监听 127.0.0.1:8000（本地），由 Nginx 反向代理，更安全
+    setsid "$PYTHON" manage.py runserver 127.0.0.1:8000 >> "$DJANGO_LOG" 2>&1 < /dev/null &
     DJANGO_PID_VALUE=$!
     cd "$PROJECT_DIR" || exit 1
     
@@ -96,7 +97,7 @@ start_django() {
         echo "      2. 检查数据库文件: ls -la $PROJECT_DIR/db/db.sqlite3"
         echo "      3. 检查配置文件: ls -la $PROJECT_DIR/config/config.py"
         echo "      4. 检查虚拟环境: $PYTHON --version"
-        echo "      5. 手动测试: cd $PROJECT_DIR/config && $PYTHON manage.py runserver 0.0.0.0:8000"
+        echo "      5. 手动测试: cd $PROJECT_DIR/config && $PYTHON manage.py runserver 127.0.0.1:8000"
         rm -f "$DJANGO_PID"
         return 1
     fi
