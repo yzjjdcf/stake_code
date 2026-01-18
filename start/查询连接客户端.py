@@ -40,12 +40,13 @@ def format_connections(connections, service_name):
     sorted_connections = sorted(connections, key=lambda x: x.get('ip', ''))
     
     print(f"\n{service_name} 连接列表 (共 {len(sorted_connections)} 个):")
-    print("=" * 80)
-    print(f"{'序号':<6} {'Username':<20} {'IP 地址':<20} {'端口':<8} {'最后更新':<20}")
-    print("-" * 80)
+    print("=" * 100)
+    print(f"{'序号':<6} {'Username':<20} {'用户标识':<12} {'IP 地址':<20} {'端口':<8} {'最后更新':<20}")
+    print("-" * 100)
     
     for idx, conn in enumerate(sorted_connections, 1):
         username = conn.get('username', '-')
+        user_id = conn.get('user_id', '-')
         ip = conn.get('ip', '-')
         port = conn.get('port', '-')
         last_update = conn.get('last_update', '-')
@@ -58,15 +59,15 @@ def format_connections(connections, service_name):
             except:
                 pass
         
-        print(f"{idx:<6} {username:<20} {ip:<20} {str(port):<8} {last_update:<20}")
+        print(f"{idx:<6} {username:<20} {user_id:<12} {ip:<20} {str(port):<8} {last_update:<20}")
     
-    print("=" * 80)
+    print("=" * 100)
 
 def main():
     """主函数"""
-    print("\n" + "=" * 80)
+    print("\n" + "=" * 100)
     print("WebSocket 客户端连接查询")
-    print("=" * 80)
+    print("=" * 100)
     
     # 加载 Stake 连接
     stake_connections = load_connections(STAKE_CONN_FILE)

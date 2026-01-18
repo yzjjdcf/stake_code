@@ -209,6 +209,7 @@ WEBSOCKET_HOST = os.getenv('WEBSOCKET_HOST', '127.0.0.1')  # 默认本地，可�
 WEBSOCKET_PORT = 8765
 connected_clients = set()  # 存储所有连接的客户端
 client_username_map = {}  # 存储客户端 WebSocket 到 username 的映射 {websocket: username}
+client_user_id_map = {}  # 存储客户端 WebSocket 到 user_id 的映射 {websocket: user_id}
 client_addr_map = {}  # 存储客户端 WebSocket 到地址的映射 {websocket: (ip, port)}
 websocket_loop = None  # 存储 WebSocket 服务器的事件循环
 sent_codes = set()  # 存储已下发的代码（用于去重，避免重复下发）
@@ -565,11 +566,13 @@ def save_connections_to_file():
         for client in connected_clients:
             addr = client_addr_map.get(client)
             username = client_username_map.get(client, '-')
+            user_id = client_user_id_map.get(client, '-')
             
             if addr:
                 ip, port = addr
                 connections.append({
                     'username': username,
+                    'user_id': user_id,
                     'ip': ip,
                     'port': port,
                     'last_update': datetime.now().isoformat()
@@ -639,6 +642,7 @@ async def broadcast_to_clients(message_data, filter_usernames=None):
     for client in disconnected:
         connected_clients.discard(client)
         client_username_map.pop(client, None)  # 同时移除 username 映射
+        client_user_id_map.pop(client, None)  # 移除 user_id 映射
         client_addr_map.pop(client, None)  # 移除地址映射
     
     if disconnected:
@@ -717,12 +721,17 @@ async def websocket_handler(websocket, path):
                 try:
                     data = json.loads(message)
                     if data.get('type') == 'init':
-                        # 接收客户端初始化消息（包含 username）
+                        # 接收客户端初始化消息（包含 username 和 user_id）
                         client_username = data.get('username', '-')
-                        # 保存 username 映射
+                        client_user_id = data.get('user_id', '-')
+                        # 保存 username 和 user_id 映射
                         if client_username and client_username != '-':
                             client_username_map[websocket] = client_username
-                            logger.info(f"🔌 客户端账号信息: {client_addr} | 账号: {client_username}")
+                        if client_user_id and client_user_id != '-':
+                            client_user_id_map[websocket] = client_user_id
+                        if client_username and client_username != '-':
+                            user_id_display = f" | 用户标识: {client_user_id}" if client_user_id and client_user_id != '-' else ""
+                            logger.info(f"🔌 客户端账号信息: {client_addr} | 账号: {client_username}{user_id_display}")
                             save_connections_to_file()  # 更新连接信息
                     elif data.get('type') == 'ping':
                         # 响应心跳
@@ -777,6 +786,7 @@ async def websocket_handler(websocket, path):
         
         connected_clients.discard(websocket)
         client_username_map.pop(websocket, None)  # 移除 username 映射
+        client_user_id_map.pop(websocket, None)  # 移除 user_id 映射
         client_addr_map.pop(websocket, None)  # 移除地址映射
         save_connections_to_file()  # 更新连接信息
 

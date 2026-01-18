@@ -27,9 +27,7 @@ SECRET_KEY = 'django-insecure-=!mnjnimgbng&fv(nvyw9=3bxrp)ew*8&(71qj4__7a@6*ew63
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['*']  # 允许所有主机访问（生产环境建议指定具体IP或域名）
-# 或者指定具体IP：
-# ALLOWED_HOSTS = ['146.103.42.142', 'localhost', '127.0.0.1']
+ALLOWED_HOSTS = ['stakefav.xyz', 'www.stakefav.xyz', '146.103.42.142', 'localhost', '127.0.0.1']  # 允许域名和IP访问
 
 
 # Application definition
@@ -44,6 +42,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'serverbot.apps.ServerbotConfig',  # Stake 业务
     'winna.apps.WinnaConfig',          # Winna 业务（完全隔离）
+    'frontend.apps.FrontendConfig',     # 前台用户系统
 ]
 
 # 默认主键字段类型（Django 3.2+ 要求）
@@ -64,7 +63,7 @@ ROOT_URLCONF = 'manager.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'frontend' / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -142,3 +141,7 @@ STATIC_URL = 'static/'
 # 增加 POST/GET 参数字段数量限制（用于 Django Admin 大量数据筛选）
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 10000  # 默认是 1000，增加到 10000
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10485760  # 10MB（默认是 2621440，即 2.5MB）
+
+# 登录重定向配置
+LOGIN_URL = '/login/'
+LOGIN_REDIRECT_URL = '/'

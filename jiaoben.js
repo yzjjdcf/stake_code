@@ -75,6 +75,9 @@
     // 注意：为每个用户生成脚本时，需要修改此值
     const USER_ID = 'KK';  // 请修改为实际的用户标识符
     
+    // 用户名缓存（避免 CSP 错误后无法获取用户名）
+    let usernameCache = null;
+    
     // ==================== 日志函数 ====================
     // WebSocket 相关日志（release 模式下也打印）
     function wsLog(...args) {
@@ -1288,6 +1291,11 @@
     
     // 从页面中获取用户名（懒加载：延迟获取，等待页面完全加载）
     function getUsernameFromPage() {
+        // 如果缓存中有用户名，直接返回（避免 CSP 错误后无法获取）
+        if (usernameCache) {
+            return usernameCache;
+        }
+        
         try {
             // 方式1: 从 GraphQL 响应中提取（最可靠的方式）
             // 查找所有包含 GraphQL 数据的 script 标签
@@ -1301,6 +1309,7 @@
                         if (bodyData.data && bodyData.data.user && bodyData.data.user.name) {
                             const username = bodyData.data.user.name;
                             if (isValidUsername(username)) {
+                                usernameCache = username;  // 缓存用户名
                                 wsLog('从 GraphQL 响应中提取到用户名:', username);
                                 return username;
                             }
@@ -1311,44 +1320,9 @@
                     continue;
                 }
             }
-            
-            // 方式2: 从页面的用户信息元素中获取（过滤掉包含 "user:" 标签的元素）
-            const userElements = document.querySelectorAll('[data-username], [class*="username"], [id*="username"]');
-            for (const el of userElements) {
-                // 优先使用 data 属性，避免获取到标签文本
-                let username = el.getAttribute('data-username') || el.getAttribute('data-user');
-                if (!username) {
-                    // 如果 data 属性不存在，才使用 textContent，但要过滤掉 "user:" 这样的标签文本
-                    const text = el.textContent?.trim();
-                    if (text && !text.toLowerCase().includes('user:') && text.length > 0 && text.length < 50) {
-                        username = text;
-                    }
-                }
-                if (isValidUsername(username)) {
-                    wsLog('从页面元素中提取到用户名:', username);
-                    return username;
-                }
-            }
-            
-            // 方式3: 从 window 全局对象中获取（如果 Stake 页面有暴露）
-            try {
-                if (window.__STAKE_USER__ && window.__STAKE_USER__.name && isValidUsername(window.__STAKE_USER__.name)) {
-                    wsLog('从 window.__STAKE_USER__ 中提取到用户名:', window.__STAKE_USER__.name);
-                    return window.__STAKE_USER__.name;
-                }
-                if (window.stakeUser && window.stakeUser.name && isValidUsername(window.stakeUser.name)) {
-                    wsLog('从 window.stakeUser 中提取到用户名:', window.stakeUser.name);
-                    return window.stakeUser.name;
-                }
-                if (window.user && window.user.name && isValidUsername(window.user.name)) {
-                    wsLog('从 window.user 中提取到用户名:', window.user.name);
-                    return window.user.name;
-                }
-            } catch (e) {
-                // 忽略访问 window 属性的错误
-            }
-            
-            // 方式4: 从所有 script 标签中搜索用户名（备用方案）
+
+
+            // 方式2: 从所有 script 标签中搜索用户名（备用方案）
             const allScripts = document.querySelectorAll('script');
             for (const script of allScripts) {
                 const content = script.textContent || script.innerHTML;
@@ -1361,11 +1335,55 @@
                         potentialUsername.length >= 3 && 
                         potentialUsername.length <= 20 && 
                         /^[a-zA-Z0-9_-]+$/.test(potentialUsername)) {
+                        usernameCache = potentialUsername;  // 缓存用户名
                         wsLog('从 script 内容中提取到用户名:', potentialUsername);
                         return potentialUsername;
                     }
                 }
             }
+            
+
+            // 方式3: 从 window 全局对象中获取（如果 Stake 页面有暴露）
+            try {
+                if (window.__STAKE_USER__ && window.__STAKE_USER__.name && isValidUsername(window.__STAKE_USER__.name)) {
+                    usernameCache = window.__STAKE_USER__.name;  // 缓存用户名
+                    wsLog('从 window.__STAKE_USER__ 中提取到用户名:', window.__STAKE_USER__.name);
+                    return window.__STAKE_USER__.name;
+                }
+                if (window.stakeUser && window.stakeUser.name && isValidUsername(window.stakeUser.name)) {
+                    usernameCache = window.stakeUser.name;  // 缓存用户名
+                    wsLog('从 window.stakeUser 中提取到用户名:', window.stakeUser.name);
+                    return window.stakeUser.name;
+                }
+                if (window.user && window.user.name && isValidUsername(window.user.name)) {
+                    usernameCache = window.user.name;  // 缓存用户名
+                    wsLog('从 window.user 中提取到用户名:', window.user.name);
+                    return window.user.name;
+                }
+            } catch (e) {
+                // 忽略访问 window 属性的错误
+            }
+            
+            // 方式4: 从页面的用户信息元素中获取（过滤掉包含 "user:" 标签的元素）
+            const userElements = document.querySelectorAll('[data-username], [class*="username"], [id*="username"]');
+            for (const el of userElements) {
+                // 优先使用 data 属性，避免获取到标签文本
+                let username = el.getAttribute('data-username') || el.getAttribute('data-user');
+                if (!username) {
+                    // 如果 data 属性不存在，才使用 textContent，但要过滤掉 "user:" 这样的标签文本
+                    const text = el.textContent?.trim();
+                    if (text && !text.toLowerCase().includes('user:') && text.length > 0 && text.length < 50) {
+                        username = text;
+                    }
+                }
+                if (isValidUsername(username)) {
+                    usernameCache = username;  // 缓存用户名
+                    wsLog('从页面元素中提取到用户名:', username);
+                    return username;
+                }
+            }
+            
+       
         } catch (e) {
             wsWarn('获取用户名失败:', e);
         }
