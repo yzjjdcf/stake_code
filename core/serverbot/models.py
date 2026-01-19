@@ -1,9 +1,11 @@
 from django.db import models
+from django.contrib.auth.models import User
 
 
 class ClaimRecord(models.Model):
     """记录每个账号的抢码结果"""
-    user_id = models.CharField(max_length=100, null=True, blank=True, verbose_name="用户标识", help_text="用户唯一标识符，用于区分不同使用者（一个用户可以有多个 Stake 账号）", db_index=True)
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="用户", help_text="关联的前端用户（新数据直接关联，老数据通过 user_flag 关联）", db_index=True, related_name='claim_records')
+    user_flag = models.CharField(max_length=100, null=True, blank=True, verbose_name="用户标识", help_text="用户唯一标识符，用于区分不同使用者（一个用户可以有多个 Stake 账号）", db_index=True)
     username = models.CharField(max_length=100, null=True, blank=True, verbose_name="用户名", help_text="Stake 账号用户名字符串，用于 WebSocket 领取记录")
     code = models.CharField(max_length=100, verbose_name="红包代码", db_index=True)
     
@@ -39,10 +41,11 @@ class ClaimRecord(models.Model):
         indexes = [
             models.Index(fields=['code', 'status']),
             models.Index(fields=['created_at']),
-            models.Index(fields=['user_id', 'created_at']),  # 用于按用户查询
+            models.Index(fields=['user_flag', 'created_at']),  # 用于按用户查询（老数据）
+            models.Index(fields=['user', 'created_at']),  # 用于按用户查询（新数据）
         ]
     
     def __str__(self):
         status_display = dict(self.STATUS_CHOICES).get(self.status, self.status)
-        user_display = self.username or "未知用户"
-        return f"{user_display} - {self.code} ({status_display})"
+        account_display = self.username or "未知账号"
+        return f"{account_display} - {self.code} ({status_display})"

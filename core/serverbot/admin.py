@@ -10,16 +10,16 @@ from .models import ClaimRecord
 
 # 自定义筛选器：按账号筛选
 class UsernameFilter(SimpleListFilter):
-    title = '账号'
+    title = 'Stake账号'
     parameter_name = 'username'
 
     def lookups(self, request, model_admin):
         # 获取所有不同的账号（使用 set 确保去重）
         usernames = ClaimRecord.objects.values_list('username', flat=True).distinct()
-        usernames = [u for u in usernames if u]  # 过滤掉 None
+        usernames = [a for a in usernames if a]  # 过滤掉 None
         # 使用 set 再次去重，然后排序
         unique_usernames = sorted(set(usernames))
-        return [(u, u) for u in unique_usernames]
+        return [(a, a) for a in unique_usernames]
 
     def queryset(self, request, queryset):
         if self.value():
@@ -69,19 +69,19 @@ class ClaimRecordAdmin(admin.ModelAdmin):
     
     list_filter = [
         'status',
-        'user_id',  # 按用户标识筛选
+        'user_flag',  # 按用户标识筛选
         UsernameFilter,
         BonusValueFilter,
         ('created_at', DateFieldListFilter),
     ]
     
-    search_fields = ['code', 'user_id', 'username']
+    search_fields = ['code', 'user_flag', 'username']
     
     readonly_fields = ('created_at', 'get_response_json_formatted')
     
     fieldsets = (
         ('基本信息', {
-            'fields': ('code', 'user_id', 'username', 'status', 'created_at')
+            'fields': ('code', 'user_flag', 'username', 'status', 'created_at')
         }),
         ('奖金信息', {
             'fields': ('bonus_value', 'bonus_amount', 'bonus_currency'),
@@ -157,9 +157,9 @@ class ClaimRecordAdmin(admin.ModelAdmin):
     
     def get_user_id_display(self, obj):
         """优化用户标识显示"""
-        user_id = obj.user_id
-        if user_id:
-            return mark_safe(f'<span style="color: #6c757d; font-weight: 500;">{user_id}</span>')
+        user_flag = obj.user_flag
+        if user_flag:
+            return mark_safe(f'<span style="color: #6c757d; font-weight: 500;">{user_flag}</span>')
         else:
             return mark_safe('<span style="color: #999;">-</span>')
     get_user_id_display.short_description = '用户标识'
@@ -171,7 +171,7 @@ class ClaimRecordAdmin(admin.ModelAdmin):
             return mark_safe(f'<span style="color: #495057; font-weight: 500;">{username}</span>')
         else:
             return mark_safe('<span style="color: #999;">-</span>')
-    get_username_display.short_description = '账号'
+    get_username_display.short_description = 'Stake账号'
     
     def get_error_display(self, obj):
         """优化错误信息显示（截断长文本）"""

@@ -1,13 +1,16 @@
 {% extends 'frontend/base.html' %}
 
-{% block title %}账单查询 - Stake Code Claim Tool{% endblock %}
+{% block title %}领取记录 - Stake Code Claim Tool{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
-    <h2><i class="bi bi-receipt"></i> 账单查询</h2>
+    <h2><i class="bi bi-list-check"></i> 领取记录</h2>
     <div>
         <span class="badge bg-primary">总计: {{ total_count }}</span>
         <span class="badge bg-success ms-2">成功: {{ success_count }}</span>
+        {% if total_amount > 0 %}
+        <span class="badge bg-info ms-2">总奖金: {{ total_amount|floatformat:2 }}</span>
+        {% endif %}
     </div>
 </div>
 
@@ -18,45 +21,89 @@
             <table class="table table-hover">
                 <thead class="table-light">
                     <tr>
-                        <th>时间</th>
                         <th>代码</th>
-                        <th>账号</th>
+                        <th>Stake账号</th>
                         <th>状态</th>
                         <th>奖金</th>
+                        <th>错误信息</th>
                         <th>响应时间</th>
+                        <th>时间</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for record in page_obj %}
                     <tr>
+                        <td>
+                            <code style="font-family: monospace; font-weight: 600; color: #007bff;">{{ record.code|default:"-" }}</code>
+                        </td>
+                        <td>
+                            {% if record.username %}
+                            <span style="color: #495057; font-weight: 500;">{{ record.username }}</span>
+                            {% else %}
+                            <span style="color: #999;">-</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if record.status == 'claim_success' %}
+                            <span style="color: #28a745; font-weight: bold;">{{ record.get_status_display }}</span>
+                            {% elif record.status == 'claim_failure' %}
+                            <span style="color: #dc3545; font-weight: bold;">{{ record.get_status_display }}</span>
+                            {% elif record.status == 'error_403' %}
+                            <span style="color: #ffc107; font-weight: bold;">{{ record.get_status_display }}</span>
+                            {% elif record.status == 'not_found' %}
+                            <span style="color: #6c757d; font-weight: bold;">{{ record.get_status_display }}</span>
+                            {% elif record.status == 'inactive' %}
+                            <span style="color: #17a2b8; font-weight: bold;">{{ record.get_status_display }}</span>
+                            {% elif record.status == 'session_expired' %}
+                            <span style="color: #ff9800; font-weight: bold;">{{ record.get_status_display }}</span>
+                            {% elif record.status == 'already_claimed' %}
+                            <span style="color: #6f42c1; font-weight: bold;">{{ record.get_status_display }}</span>
+                            {% elif record.status == 'weekly_wager_requirement' %}
+                            <span style="color: #17a2b8; font-weight: bold;">{{ record.get_status_display }}</span>
+                            {% elif record.status == 'drop_unavailable' %}
+                            <span style="color: #ff9800; font-weight: bold;">{{ record.get_status_display }}</span>
+                            {% else %}
+                            <span style="color: #dc3545; font-weight: bold;">{{ record.get_status_display }}</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if record.bonus_amount is not None %}
+                            {% with amount=record.bonus_amount|floatformat:2 currency=record.bonus_currency|default:"" %}
+                            <span style="color: #28a745; font-weight: 600;">{{ amount }} {{ currency }}</span>
+                            {% endwith %}
+                            {% elif record.bonus_value %}
+                            <span style="color: #28a745; font-weight: 600;">{{ record.bonus_value }}</span>
+                            {% else %}
+                            <span style="color: #999;">-</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if record.error_message %}
+                            {% with error=record.error_message %}
+                            {% if error|length > 50 %}
+                            <span style="color: #dc3545; font-size: 12px;" title="{{ error }}">{{ error|slice:":50" }}...</span>
+                            {% else %}
+                            <span style="color: #dc3545; font-size: 12px;">{{ error }}</span>
+                            {% endif %}
+                            {% endwith %}
+                            {% else %}
+                            <span style="color: #999;">-</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if record.response_time_ms is not None %}
+                            {% if record.response_time_ms < 300 %}
+                            <span style="color: #28a745; font-weight: 600;">{{ record.response_time_ms }}ms</span>
+                            {% elif record.response_time_ms < 500 %}
+                            <span style="color: #ffc107; font-weight: 600;">{{ record.response_time_ms }}ms</span>
+                            {% else %}
+                            <span style="color: #dc3545; font-weight: 600;">{{ record.response_time_ms }}ms</span>
+                            {% endif %}
+                            {% else %}
+                            <span style="color: #999;">-</span>
+                            {% endif %}
+                        </td>
                         <td>{{ record.created_at|date:"Y-m-d H:i:s" }}</td>
-                        <td><code>{{ record.code }}</code></td>
-                        <td>{{ record.username|default:"-" }}</td>
-                        <td>
-                            <span class="badge 
-                                {% if record.status == 'claim_success' %}bg-success
-                                {% elif record.status == 'claim_failure' %}bg-danger
-                                {% elif record.status == 'inactive' %}bg-warning
-                                {% elif record.status == 'not_found' %}bg-secondary
-                                {% else %}bg-info
-                                {% endif %}">
-                                {{ record.get_status_display }}
-                            </span>
-                        </td>
-                        <td>
-                            {% if record.bonus_value %}
-                                {{ record.bonus_value }}
-                            {% else %}
-                                <span class="text-muted">-</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if record.response_time_ms %}
-                                {{ record.response_time_ms }}ms
-                            {% else %}
-                                <span class="text-muted">-</span>
-                            {% endif %}
-                        </td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -104,10 +151,9 @@
         {% else %}
         <div class="text-center py-5">
             <i class="bi bi-inbox" style="font-size: 3rem; color: #ccc;"></i>
-            <p class="text-muted mt-3">暂无账单记录</p>
+            <p class="text-muted mt-3">暂无领取记录</p>
         </div>
         {% endif %}
     </div>
 </div>
 {% endblock %}
-

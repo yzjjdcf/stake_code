@@ -863,8 +863,8 @@ async def handle_claim_result(data):
             # 定义同步函数
             def create_claim_record():
                 return ClaimRecord.objects.create(
-                    user_id=user_id,  # 用户标识符（用于区分不同使用者）
-                    username=username,  # Stake 账号用户名字符串
+                    user_flag=user_id,  # 用户标识符（用于区分不同使用者，数据库字段已重命名为 user_flag）
+                    username=username,  # Stake 账号用户名（用于 WebSocket 领取记录）
                     code=code,
                     status=final_status,
                     bonus_value=bonus_value,  # 显示用的字符串

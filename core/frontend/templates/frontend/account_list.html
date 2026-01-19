@@ -5,6 +5,9 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h2><i class="bi bi-person-circle"></i> 账号管理</h2>
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addAccountModal">
+        <i class="bi bi-plus-circle"></i> 添加账号
+    </button>
 </div>
 
 <div class="card shadow">
@@ -15,7 +18,9 @@
                 <thead class="table-light">
                     <tr>
                         <th>序号</th>
-                        <th>账号名称</th>
+                        <th>账号ID</th>
+                        <th>状态</th>
+                        <th>创建时间</th>
                         <th>操作</th>
                     </tr>
                 </thead>
@@ -24,12 +29,25 @@
                     <tr>
                         <td>{{ forloop.counter }}</td>
                         <td>
-                            <i class="bi bi-person"></i> {{ account.username|default:"-" }}
+                            <i class="bi bi-person"></i> {{ account.stake_account_id }}
                         </td>
                         <td>
-                            <a href="{% url 'frontend:billing_list' %}?username={{ account.username }}" class="btn btn-sm btn-outline-primary">
-                                <i class="bi bi-receipt"></i> 查看记录
-                            </a>
+                            <span class="badge {% if account.is_active %}bg-success{% else %}bg-secondary{% endif %}">
+                                {% if account.is_active %}激活{% else %}停用{% endif %}
+                            </span>
+                        </td>
+                        <td>{{ account.created_at|date:"Y-m-d H:i" }}</td>
+                        <td>
+                            <div class="form-check form-switch d-inline-block me-2">
+                                <input class="form-check-input toggle-active" type="checkbox" id="toggleActive{{ account.id }}" data-account-id="{{ account.id }}" {% if account.is_active %}checked{% endif %}>
+                                <label class="form-check-label" for="toggleActive{{ account.id }}">激活</label>
+                            </div>
+                            <form method="post" action="{% url 'frontend:account_delete' account.id %}" class="d-inline-block" onsubmit="return confirm('确定要删除账号 {{ account.stake_account_id }} 吗？');">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-sm btn-outline-danger">
+                                    <i class="bi bi-trash"></i> 删除
+                                </button>
+                            </form>
                         </td>
                     </tr>
                     {% endfor %}
@@ -40,10 +58,99 @@
         <div class="text-center py-5">
             <i class="bi bi-inbox" style="font-size: 3rem; color: #ccc;"></i>
             <p class="text-muted mt-3">暂无账号记录</p>
-            <p class="text-muted">账号信息将在您首次使用脚本领取代码后显示</p>
+            <p class="text-muted">点击"添加账号"按钮添加您的 Stake 账号</p>
         </div>
         {% endif %}
     </div>
 </div>
+
+<!-- Add Account Modal -->
+<div class="modal fade" id="addAccountModal" tabindex="-1" aria-labelledby="addAccountModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" action="{% url 'frontend:account_add' %}">
+                {% csrf_token %}
+                <div class="modal-header">
+                    <h5 class="modal-title" id="addAccountModalLabel">
+                        <i class="bi bi-plus-circle"></i> 添加账号
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="stakeAccountId" class="form-label">Stake 账号ID</label>
+                        <input type="text" class="form-control" id="stakeAccountId" name="stake_account_id" required placeholder="请输入 Stake 账号用户名或ID">
+                    </div>
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="isActive" name="is_active" checked>
+                            <label class="form-check-label" for="isActive">
+                                激活账号（默认激活）
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary">添加</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // 处理激活/停用开关
+    document.querySelectorAll('.toggle-active').forEach(function(checkbox) {
+        checkbox.addEventListener('change', function() {
+            const accountId = this.getAttribute('data-account-id');
+            const isActive = this.checked;
+            
+            // 获取 CSRF token
+            const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+            
+            // 发送 AJAX 请求
+            fetch(`/accounts/${accountId}/toggle-active/`, {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': csrfToken,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({})
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // 更新状态标签
+                    const row = this.closest('tr');
+                    const statusCell = row.querySelector('td:nth-child(3)');
+                    const statusBadge = statusCell.querySelector('.badge');
+                    if (data.is_active) {
+                        statusBadge.textContent = '激活';
+                        statusBadge.classList.remove('bg-secondary');
+                        statusBadge.classList.add('bg-success');
+                    } else {
+                        statusBadge.textContent = '停用';
+                        statusBadge.classList.remove('bg-success');
+                        statusBadge.classList.add('bg-secondary');
+                    }
+                } else {
+                    // 恢复原来的状态
+                    this.checked = !isActive;
+                    alert('操作失败，请重试');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                // 恢复原来的状态
+                this.checked = !isActive;
+                alert('操作失败，请重试');
+            });
+        });
+    });
+});
+</script>
+{% endblock %}
