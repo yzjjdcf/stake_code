@@ -162,7 +162,7 @@ target_channels = [
     -1001738096535,  # RainsTEAM
     -1001977383442,  # daily
     -1003315955015,  # 测试频道
-    -1002032779602,  # HighRollersStake
+    -1001992047801,  # HighRollersStake
     -1002140237447,  # FC频道，使用 code_format_parser
     -1003538327109,  # 补码频道，使用 code_format_parser
     -1002493460363,  # private_code，使用 rains_team_parser
@@ -177,7 +177,7 @@ core_channels = target_channels.copy()  # 包含所有频道，包括测试频�
 TEST_CHANNEL_ID = -1003315955015
 
 channel_id_map = {
-    -1002032779602: 'high_rollers_parser',  # HighRollersStake
+    -1001992047801: 'high_rollers_parser',  # HighRollersStake
     -1001977383442: 'daily_code_parser',    # daily
     -1003315955015: 'daily_code_parser',    # stake_cn_chat_room
     -1001738096535: 'rains_team_parser',    # RainsTEAM
@@ -189,7 +189,7 @@ channel_id_map = {
 
 # 频道名称映射（用于日志输出）
 channel_name_map = {
-    -1002032779602: 'high_roller',      # HighRollersStake
+    -1001992047801: 'high_roller',      # HighRollersStake
     -1001977383442: 'daily_drop',       # daily
     -1003315955015: '测试频道',          # stake_cn_chat_room
     -1001738096535: '周奖频道',          # RainsTEAM

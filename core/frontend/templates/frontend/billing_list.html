@@ -14,6 +14,70 @@
     </div>
 </div>
 
+<!-- 筛选表单 -->
+<div class="card shadow mb-3">
+    <div class="card-body">
+        <form method="get" action="{% url 'frontend:billing_list' %}" class="row g-3" autocomplete="off">
+            <div class="col-md-2">
+                <label class="form-label">代码</label>
+                <div class="position-relative">
+                    <input type="text" name="code" id="code-input" class="form-control form-control-sm" value="{{ filter_code }}" placeholder="输入或选择代码" autocomplete="off">
+                    <div id="code-dropdown" class="dropdown-menu position-absolute w-100" style="max-height: 200px; overflow-y: auto; display: none; z-index: 1000; margin-top: 0;">
+                        {% for code in code_list %}
+                        <a class="dropdown-item code-option" href="javascript:void(0)" data-value="{{ code }}">{{ code }}</a>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">Stake账号</label>
+                <div class="position-relative">
+                    <input type="text" name="username" id="username-input" class="form-control form-control-sm" value="{{ filter_username }}" placeholder="输入或选择账号" autocomplete="off">
+                    <div id="username-dropdown" class="dropdown-menu position-absolute w-100" style="max-height: 200px; overflow-y: auto; display: none; z-index: 1000; margin-top: 0;">
+                        {% for username in username_list %}
+                        <a class="dropdown-item username-option" href="javascript:void(0)" data-value="{{ username }}">{{ username }}</a>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">状态</label>
+                <select name="status" class="form-select form-select-sm">
+                    <option value="">全部</option>
+                    {% for status_value, status_label in status_list %}
+                    <option value="{{ status_value }}" {% if filter_status == status_value %}selected{% endif %}>{{ status_label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">奖金</label>
+                <select name="bonus_amount" class="form-select form-select-sm">
+                    <option value="">全部</option>
+                    {% for bonus_int in bonus_amount_list %}
+                    <option value="{{ bonus_int }}" {% if filter_bonus_amount == bonus_int|stringformat:"s" %}selected{% endif %}>{{ bonus_int }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">开始日期</label>
+                <input type="date" name="start_date" class="form-control form-control-sm" value="{{ filter_start_date }}">
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">结束日期</label>
+                <input type="date" name="end_date" class="form-control form-control-sm" value="{{ filter_end_date }}">
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary btn-sm">
+                    <i class="bi bi-funnel"></i> 筛选
+                </button>
+                <a href="{% url 'frontend:billing_list' %}" class="btn btn-secondary btn-sm ms-2">
+                    <i class="bi bi-x-circle"></i> 清空
+                </a>
+            </div>
+        </form>
+    </div>
+</div>
+
 <div class="card shadow">
     <div class="card-body">
         {% if page_obj %}
@@ -114,9 +178,21 @@
         {% if page_obj.has_other_pages %}
         <nav aria-label="分页导航">
             <ul class="pagination justify-content-center">
+                <!-- 首页 -->
+                {% if page_obj.number > 1 %}
+                <li class="page-item">
+                    <a class="page-link" href="?{% if filter_query_string %}{{ filter_query_string }}&{% endif %}page=1">首页</a>
+                </li>
+                {% else %}
+                <li class="page-item disabled">
+                    <span class="page-link">首页</span>
+                </li>
+                {% endif %}
+                
+                <!-- 上一页 -->
                 {% if page_obj.has_previous %}
                 <li class="page-item">
-                    <a class="page-link" href="?page={{ page_obj.previous_page_number }}">上一页</a>
+                    <a class="page-link" href="?{% if filter_query_string %}{{ filter_query_string }}&{% endif %}page={{ page_obj.previous_page_number }}">上一页</a>
                 </li>
                 {% else %}
                 <li class="page-item disabled">
@@ -124,25 +200,38 @@
                 </li>
                 {% endif %}
                 
-                {% for num in page_obj.paginator.page_range %}
+                <!-- 页码 -->
+                {% for num in page_range %}
                     {% if page_obj.number == num %}
                     <li class="page-item active">
                         <span class="page-link">{{ num }}</span>
                     </li>
-                    {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+                    {% else %}
                     <li class="page-item">
-                        <a class="page-link" href="?page={{ num }}">{{ num }}</a>
+                        <a class="page-link" href="?{% if filter_query_string %}{{ filter_query_string }}&{% endif %}page={{ num }}">{{ num }}</a>
                     </li>
                     {% endif %}
                 {% endfor %}
                 
+                <!-- 下一页 -->
                 {% if page_obj.has_next %}
                 <li class="page-item">
-                    <a class="page-link" href="?page={{ page_obj.next_page_number }}">下一页</a>
+                    <a class="page-link" href="?{% if filter_query_string %}{{ filter_query_string }}&{% endif %}page={{ page_obj.next_page_number }}">下一页</a>
                 </li>
                 {% else %}
                 <li class="page-item disabled">
                     <span class="page-link">下一页</span>
+                </li>
+                {% endif %}
+                
+                <!-- 尾页 -->
+                {% if page_obj.number < page_obj.paginator.num_pages %}
+                <li class="page-item">
+                    <a class="page-link" href="?{% if filter_query_string %}{{ filter_query_string }}&{% endif %}page={{ page_obj.paginator.num_pages }}">尾页</a>
+                </li>
+                {% else %}
+                <li class="page-item disabled">
+                    <span class="page-link">尾页</span>
                 </li>
                 {% endif %}
             </ul>
@@ -156,4 +245,111 @@
         {% endif %}
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// 自定义模糊搜索下拉框
+document.addEventListener('DOMContentLoaded', function() {
+    // 代码输入框
+    const codeInput = document.getElementById('code-input');
+    const codeDropdown = document.getElementById('code-dropdown');
+    const codeOptions = codeDropdown.querySelectorAll('.code-option');
+    
+    // Stake账号输入框
+    const usernameInput = document.getElementById('username-input');
+    const usernameDropdown = document.getElementById('username-dropdown');
+    const usernameOptions = usernameDropdown.querySelectorAll('.username-option');
+    
+    // 创建模糊搜索函数
+    function filterDropdown(input, dropdown, options, filterValue) {
+        const value = filterValue.toLowerCase().trim();
+        let hasMatch = false;
+        
+        options.forEach(function(option) {
+            const text = option.textContent.toLowerCase();
+            if (text.includes(value)) {
+                option.style.display = '';
+                hasMatch = true;
+            } else {
+                option.style.display = 'none';
+            }
+        });
+        
+        if (hasMatch && value.length > 0) {
+            dropdown.style.display = 'block';
+        } else {
+            dropdown.style.display = 'none';
+        }
+    }
+    
+    // 代码输入框事件
+    if (codeInput && codeDropdown) {
+        codeInput.addEventListener('input', function(e) {
+            filterDropdown(codeInput, codeDropdown, codeOptions, e.target.value);
+        });
+        
+        codeInput.addEventListener('focus', function(e) {
+            if (e.target.value) {
+                filterDropdown(codeInput, codeDropdown, codeOptions, e.target.value);
+            }
+        });
+        
+        codeInput.addEventListener('blur', function(e) {
+            // 延迟隐藏，让点击事件先执行
+            setTimeout(function() {
+                codeDropdown.style.display = 'none';
+            }, 200);
+        });
+        
+        // 点击选项
+        codeOptions.forEach(function(option) {
+            option.addEventListener('mousedown', function(e) {
+                e.preventDefault();
+                codeInput.value = this.getAttribute('data-value');
+                codeDropdown.style.display = 'none';
+            });
+        });
+    }
+    
+    // Stake账号输入框事件
+    if (usernameInput && usernameDropdown) {
+        usernameInput.addEventListener('input', function(e) {
+            filterDropdown(usernameInput, usernameDropdown, usernameOptions, e.target.value);
+        });
+        
+        usernameInput.addEventListener('focus', function(e) {
+            if (e.target.value) {
+                filterDropdown(usernameInput, usernameDropdown, usernameOptions, e.target.value);
+            }
+        });
+        
+        usernameInput.addEventListener('blur', function(e) {
+            // 延迟隐藏，让点击事件先执行
+            setTimeout(function() {
+                usernameDropdown.style.display = 'none';
+            }, 200);
+        });
+        
+        // 点击选项
+        usernameOptions.forEach(function(option) {
+            option.addEventListener('mousedown', function(e) {
+                e.preventDefault();
+                usernameInput.value = this.getAttribute('data-value');
+                usernameDropdown.style.display = 'none';
+            });
+        });
+    }
+    
+    // 点击页面其他地方时隐藏下拉框
+    document.addEventListener('click', function(e) {
+        if (codeInput && !codeInput.contains(e.target) && !codeDropdown.contains(e.target)) {
+            codeDropdown.style.display = 'none';
+        }
+        if (usernameInput && !usernameInput.contains(e.target) && !usernameDropdown.contains(e.target)) {
+            usernameDropdown.style.display = 'none';
+        }
+    });
+});
+</script>
 {% endblock %}

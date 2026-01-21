@@ -5,8 +5,10 @@ from django.contrib import messages
 from django.contrib.auth.models import User
 from django.db.models import Sum, Q
 from django.utils import timezone
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 from django.views.decorators.http import require_http_methods
+from django.views.decorators.cache import never_cache
+from urllib.parse import urlencode
 from serverbot.models import ClaimRecord
 from .models import StakeAccount
 
@@ -159,21 +161,92 @@ def balance(request):
 
 
 @login_required
+@never_cache
 def billing_list(request):
     """领取记录（只显示自己的）"""
+    from django.db.models import Q, Sum, Count
+    from datetime import datetime
+    from django.utils import timezone
+    
     # 筛选逻辑：优先通过 user_flag 关联老数据，同时也要包含新数据（通过 user 字段）
     user_flag = None
     if hasattr(request.user, 'profile') and request.user.profile.user_flag:
         user_flag = request.user.profile.user_flag
     
-    # 构建查询条件：老数据通过 user_flag，新数据通过 user
-    from django.db.models import Q
-    query = Q()
+    # 构建基础查询条件：老数据通过 user_flag，新数据通过 user
+    base_query = Q()
     if user_flag:
-        query |= Q(user_flag=user_flag)  # 老数据
-    query |= Q(user=request.user)  # 新数据
+        base_query |= Q(user_flag=user_flag)  # 老数据
+    base_query |= Q(user=request.user)  # 新数据
     
-    records = ClaimRecord.objects.filter(query).order_by('-created_at')
+    # 获取所有记录（用于获取筛选选项）
+    all_records = ClaimRecord.objects.filter(base_query)
+    
+    # 获取筛选参数
+    filter_code = request.GET.get('code', '').strip()
+    filter_username = request.GET.get('username', '').strip()
+    filter_status = request.GET.get('status', '').strip()
+    filter_bonus_amount = request.GET.get('bonus_amount', '').strip()
+    filter_start_date = request.GET.get('start_date', '').strip()
+    filter_end_date = request.GET.get('end_date', '').strip()
+    
+    # 应用筛选条件
+    records = all_records
+    if filter_code:
+        records = records.filter(code__icontains=filter_code)
+    if filter_username:
+        records = records.filter(username__icontains=filter_username)
+    if filter_status:
+        records = records.filter(status=filter_status)
+    if filter_bonus_amount:
+        try:
+            bonus_int = int(filter_bonus_amount)
+            # 筛选奖金整数部分等于指定值
+            records = records.filter(bonus_amount__gte=bonus_int, bonus_amount__lt=bonus_int+1)
+        except ValueError:
+            pass
+    if filter_start_date:
+        try:
+            start_date = datetime.strptime(filter_start_date, '%Y-%m-%d').date()
+            # USE_TZ = False，使用普通datetime（非时区感知）
+            start_datetime = datetime.combine(start_date, datetime.min.time())
+            records = records.filter(created_at__gte=start_datetime)
+        except ValueError:
+            pass
+    if filter_end_date:
+        try:
+            end_date = datetime.strptime(filter_end_date, '%Y-%m-%d').date()
+            # 结束日期包含当天的23:59:59，USE_TZ = False，使用普通datetime（非时区感知）
+            end_datetime = datetime.combine(end_date, datetime.max.time())
+            records = records.filter(created_at__lte=end_datetime)
+        except ValueError:
+            pass
+    
+    records = records.order_by('-created_at')
+    
+    # 获取筛选选项（去重）
+    # 注意：all_records 已经通过 base_query 筛选，只包含当前用户的记录
+    # （如果用户有 user_flag，则包含 user_flag 匹配的记录；同时包含 user 匹配的记录）
+    
+    # 代码列表（去重）- 只包含当前用户的代码
+    code_list = sorted(set(
+        all_records.exclude(code__isnull=True).exclude(code='').values_list('code', flat=True).distinct()
+    ))
+    
+    # 账号列表（去重）- 只包含当前用户的账号（基于 user_flag 或 user 字段）
+    username_list = sorted(set(
+        all_records.exclude(username__isnull=True).exclude(username='').values_list('username', flat=True).distinct()
+    ))
+    
+    # 状态选项（使用模型定义的状态）
+    status_list = ClaimRecord.STATUS_CHOICES
+    
+    # 奖金整数列表（去重，取bonus_amount的整数部分）
+    bonus_amount_list = sorted(set([
+        int(bonus) for bonus in 
+        all_records.exclude(bonus_amount__isnull=True).values_list('bonus_amount', flat=True).distinct()
+        if bonus is not None
+    ]), reverse=True)
     
     # 分页
     from django.core.paginator import Paginator
@@ -181,8 +254,45 @@ def billing_list(request):
     page_number = request.GET.get('page')
     page_obj = paginator.get_page(page_number)
     
-    # 统计信息
-    from django.db.models import Sum, Count
+    # 计算页码范围（最多显示10个页码）
+    num_pages = paginator.num_pages
+    current_page = page_obj.number
+    max_pages_to_show = 10
+    
+    if num_pages <= max_pages_to_show:
+        # 如果总页数少于等于10，显示所有页码
+        page_range = list(range(1, num_pages + 1))
+    else:
+        # 如果总页数大于10，显示当前页周围的页码
+        if current_page <= 5:
+            # 当前页在前5页，显示前10页
+            page_range = list(range(1, max_pages_to_show + 1))
+        elif current_page >= num_pages - 4:
+            # 当前页在后5页，显示后10页
+            page_range = list(range(num_pages - max_pages_to_show + 1, num_pages + 1))
+        else:
+            # 当前页在中间，显示当前页前后各5页（总共10页）
+            page_range = list(range(current_page - 4, current_page + 6))
+    
+    # 构建筛选参数（用于分页链接）
+    filter_params = {}
+    if filter_code:
+        filter_params['code'] = filter_code
+    if filter_username:
+        filter_params['username'] = filter_username
+    if filter_status:
+        filter_params['status'] = filter_status
+    if filter_bonus_amount:
+        filter_params['bonus_amount'] = filter_bonus_amount
+    if filter_start_date:
+        filter_params['start_date'] = filter_start_date
+    if filter_end_date:
+        filter_params['end_date'] = filter_end_date
+    
+    # 生成URL参数字符串（用于分页链接）
+    filter_query_string = urlencode(filter_params) if filter_params else ''
+    
+    # 统计信息（基于筛选后的记录）
     stats = records.filter(status='claim_success').aggregate(
         total_amount=Sum('bonus_amount'),
         success_count=Count('id')
@@ -194,6 +304,19 @@ def billing_list(request):
     
     context = {
         'page_obj': page_obj,
+        'page_range': page_range,
+        'filter_params': filter_params,
+        'filter_query_string': filter_query_string,
+        'filter_code': filter_code,
+        'filter_username': filter_username,
+        'filter_status': filter_status,
+        'filter_bonus_amount': filter_bonus_amount,
+        'filter_start_date': filter_start_date,
+        'filter_end_date': filter_end_date,
+        'code_list': code_list,
+        'username_list': username_list,
+        'status_list': status_list,
+        'bonus_amount_list': bonus_amount_list,
         'total_count': total_count,
         'success_count': success_count,
         'total_amount': total_amount,
