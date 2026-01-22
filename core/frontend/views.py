@@ -250,7 +250,7 @@ def billing_list(request):
     
     # 分页
     from django.core.paginator import Paginator
-    paginator = Paginator(records, 20)  # 每页20条
+    paginator = Paginator(records, 50)  # 每页20条
     page_number = request.GET.get('page')
     page_obj = paginator.get_page(page_number)
     
