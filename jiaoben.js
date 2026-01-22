@@ -1224,6 +1224,9 @@
                     status = 'weekly_wager_requirement';
                 } else if (result.error.includes('7天内不能领代码') || result.error.includes('dropUnavailable') || result.error.includes('drop_unavailable')) {
                     status = 'drop_unavailable';
+                } else if (result.error.includes('Unexpected token') && result.error.includes('<!DOCTYPE')) {
+                    // JSON 解析错误，通常是 Cloudflare 验证页面（HTML 而非 JSON），需要手动刷新
+                    status = 'error_403';
                 }
                 
                 // 发送失败结果回服务器（使用服务器时间）
@@ -1602,7 +1605,7 @@
                         }
                     }
                     
-                    // 根据错误类型返回相应状态（完全仿照项目逻辑）
+                    // 根据错误类型返回相应状态（与 STATUS_CHOICES 中的显示文案保持一致）
                     let errorStatus = '未知错误';
                     if (errorType === 'notFound' || errorMsg.includes('not found') || errorMsg.includes('cannot be found')) {
                         errorStatus = '代码不存在';
@@ -1647,9 +1650,14 @@
             }
         } catch (e) {
             wsError('API 请求异常:', e);
+            // 如果是 JSON 解析错误（通常是 Cloudflare 验证页面），转换为友好的错误信息
+            let errorMsg = e.message || '请求异常';
+            if (errorMsg.includes('Unexpected token') && errorMsg.includes('<!DOCTYPE')) {
+                errorMsg = '403错误';
+            }
             return {
                 success: false,
-                error: e.message || '请求异常',
+                error: errorMsg,
                 fullResponse: null  // 异常时没有响应数据
             };
         }

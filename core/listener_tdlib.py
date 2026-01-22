@@ -851,6 +851,8 @@ async def handle_claim_result(data):
             'session_expired': 'session_expired',
             'already_claimed': 'already_claimed',
             'weekly_wager_requirement': 'weekly_wager_requirement',
+            'drop_unavailable': 'drop_unavailable',
+            'error_403': 'error_403',
             'error': 'error'
         }
         final_status = status_mapping.get(status, 'error')
