@@ -584,7 +584,7 @@ def save_connections_to_file():
 
 
 async def broadcast_to_clients(message_data):
-    """向所有连接的客户端广播消息"""
+    """向所有连接的客户端广播消息（并发发送）"""
     if not connected_clients:
         logger.debug("⚠️ 没有连接的客户端，消息未发送")
         return
@@ -592,12 +592,21 @@ async def broadcast_to_clients(message_data):
     message_json = json.dumps(message_data, ensure_ascii=False)
     disconnected = set()
     
-    for client in connected_clients:
+    # 定义发送给单个客户端的协程函数
+    async def send_to_client(client):
         try:
             await client.send(message_json)
+            return True
         except Exception as e:
             logger.warning(f"⚠️ 发送消息到客户端失败: {e}")
             disconnected.add(client)
+            return False
+    
+    # 并发发送给所有客户端
+    clients_list = list(connected_clients)
+    if clients_list:
+        # 使用 asyncio.gather 并发执行所有发送任务
+        await asyncio.gather(*[send_to_client(client) for client in clients_list], return_exceptions=True)
     
     # 移除断开的客户端
     connected_clients.difference_update(disconnected)

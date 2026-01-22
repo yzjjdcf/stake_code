@@ -556,6 +556,25 @@ def keep_alive_with_openchat():
         logger.warning(f"⚠️ openChat 拉活失败: {e}")
 
 
+def periodic_keep_alive():
+    """
+    定期拉活（每 5 分钟执行一次 openChat 和 getChats，保持连接活跃并提高消息接收优先级）
+    """
+    while True:
+        try:
+            time.sleep(300)  # 等待 5 分钟
+            # 定期打开核心频道（拉活）
+            keep_alive_with_openchat()
+            # 定期获取对话列表（保持连接活跃）
+            try:
+                tg.get_chats().wait(timeout=10)
+                logger.debug("✅ 定期拉活：已刷新对话列表")
+            except Exception as e:
+                logger.debug(f"⚠️ 定期拉活：刷新对话列表失败: {e}")
+        except Exception as e:
+            logger.warning(f"⚠️ 定期拉活异常: {e}")
+
+
 def save_connections_to_file():
     """保存当前连接信息到文件"""
     try:
@@ -594,7 +613,7 @@ def save_connections_to_file():
 
 async def broadcast_to_clients(message_data, filter_usernames=None):
     """
-    向所有连接的客户端广播消息（增强稳定性：超时控制、错误处理）
+    向所有连接的客户端广播消息（增强稳定性：超时控制、错误处理、并发发送）
     
     Args:
         message_data: 要发送的消息数据
@@ -608,35 +627,49 @@ async def broadcast_to_clients(message_data, filter_usernames=None):
     disconnected = set()
     sent_count = 0
     
-    for client in list(connected_clients):  # 使用列表副本，避免迭代时修改
+    # 定义发送给单个客户端的协程函数
+    async def send_to_client(client):
+        nonlocal sent_count
         try:
             # 检查连接是否已关闭
             if client.closed:
                 disconnected.add(client)
-                continue
+                return False
             
             # 如果指定了过滤条件，检查客户端的 username
             if filter_usernames:
                 client_username = client_username_map.get(client)
                 if client_username not in filter_usernames:
-                    continue  # 跳过不在测试账号列表中的客户端
+                    return False  # 跳过不在测试账号列表中的客户端
             
             # 发送消息，设置超时（5秒）
             try:
                 await asyncio.wait_for(client.send(message_json), timeout=5.0)
                 sent_count += 1
+                return True
             except asyncio.TimeoutError:
                 # 发送超时，连接可能有问题
                 disconnected.add(client)
+                return False
             except websockets.exceptions.ConnectionClosed:
                 disconnected.add(client)
+                return False
             except websockets.exceptions.ConnectionClosedError:
                 disconnected.add(client)
+                return False
             except websockets.exceptions.ConnectionClosedOK:
                 disconnected.add(client)
+                return False
         except Exception as e:
             # 其他异常，标记为断开
             disconnected.add(client)
+            return False
+    
+    # 并发发送给所有客户端
+    clients_list = list(connected_clients)  # 使用列表副本，避免迭代时修改
+    if clients_list:
+        # 使用 asyncio.gather 并发执行所有发送任务
+        await asyncio.gather(*[send_to_client(client) for client in clients_list], return_exceptions=True)
     
     # 移除断开的客户端
     for client in disconnected:
@@ -1229,6 +1262,11 @@ if __name__ == "__main__":
 
         # 初始化时打开核心频道（拉活）
         keep_alive_with_openchat()
+        
+        # 启动定期拉活线程（每 5 分钟执行一次，保持连接活跃并提高消息接收优先级）
+        keep_alive_thread = Thread(target=periodic_keep_alive, daemon=True)
+        keep_alive_thread.start()
+        logger.info("✅ 已启动定期拉活线程（每 5 分钟执行一次）")
 
         # 优化：设置消息接收优先级
         try:
