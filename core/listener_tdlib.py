@@ -12,7 +12,8 @@ import ipaddress
 import random
 from threading import Thread
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
+import shutil
 
 # 动态修正路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -67,9 +68,115 @@ class MillisecondFormatter(logging.Formatter):
         s = '%s.%03d' % (t, record.msecs)
         return s
 
+# 全局变量，用于日志轮转
+current_file_handler = None
+
+def rotate_log_file():
+    """轮转日志文件：将当前日志保存为带日期的文件，创建新的日志文件"""
+    global current_file_handler
+    logger_instance = logging.getLogger('listener_tdlib')
+    
+    try:
+        # 获取当前时间（服务器时区应该是 UTC+8 北京时间）
+        now = datetime.now()
+        # 获取昨天的日期（用于命名轮转后的日志文件，因为是在 0 点轮转，所以是昨天的日志）
+        yesterday = now - timedelta(days=1)
+        date_str = yesterday.strftime('%Y-%m-%d')
+        
+        # 如果日志文件存在且有内容，则重命名
+        if os.path.exists(log_file) and os.path.getsize(log_file) > 0:
+            dated_log_file = os.path.join(log_dir, f'listener_tdlib_{date_str}.log')
+            
+            # 先创建新的 FileHandler（避免日志写入中断）
+            new_file_handler = logging.FileHandler(log_file, encoding='utf-8')
+            new_file_handler.setLevel(logging.INFO)
+            new_file_handler.setFormatter(MillisecondFormatter(
+                '[%(asctime)s] %(levelname)s: %(message)s'
+            ))
+            logger_instance.addHandler(new_file_handler)
+            
+            # 然后关闭旧的 handler
+            if current_file_handler:
+                current_file_handler.flush()  # 确保所有日志都已写入
+                current_file_handler.close()
+                logger_instance.removeHandler(current_file_handler)
+            
+            # 重命名日志文件
+            if os.path.exists(log_file):
+                # 先复制文件内容到新文件（保留旧文件用于重命名）
+                temp_file = log_file + '.tmp'
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                shutil.copy2(log_file, temp_file)
+                
+                # 重命名旧文件
+                if os.path.exists(dated_log_file):
+                    os.remove(dated_log_file)  # 如果已存在同名文件，先删除
+                shutil.move(temp_file, dated_log_file)
+                
+                # 清空当前日志文件（因为新 handler 已经创建，会继续写入）
+                with open(log_file, 'w', encoding='utf-8') as f:
+                    f.write('')  # 清空文件
+            
+            # 更新全局 handler 引用
+            current_file_handler = new_file_handler
+            logger_instance.info(f"📁 日志已轮转: listener_tdlib.log -> listener_tdlib_{date_str}.log")
+            logger_instance.info(f"📝 新日志文件已创建: {log_file}")
+    except Exception as e:
+        # 如果轮转失败，记录错误但不影响主程序
+        try:
+            logger_instance.error(f"❌ 日志轮转失败: {e}", exc_info=True)
+        except:
+            print(f"❌ 日志轮转失败: {e}")
+
+def log_rotation_scheduler():
+    """日志轮转调度器：每天北京时间 0 点执行轮转和清空 sent_codes"""
+    logger_instance = logging.getLogger('listener_tdlib')
+    
+    while True:
+        try:
+            # 获取当前时间（服务器时区应该是 UTC+8 北京时间）
+            now = datetime.now()
+            
+            # 计算到今天 0 点的时间
+            target_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            if now >= target_time:
+                # 如果已经过了 0 点，则设置为明天的 0 点
+                target_time += timedelta(days=1)
+            
+            # 计算需要等待的秒数
+            wait_seconds = (target_time - now).total_seconds()
+            
+            logger_instance.info(f"📅 日志轮转调度器：将在 {wait_seconds/3600:.2f} 小时后（北京时间 {target_time.strftime('%Y-%m-%d %H:%M:%S')}）执行日志轮转和清空代码集合")
+            
+            # 等待到 0 点
+            time.sleep(wait_seconds)
+            
+            # 执行轮转
+            rotate_log_file()
+            
+            # 清空 sent_codes 集合（每天零点清空，避免代码去重集合过大）
+            global sent_codes
+            codes_count = len(sent_codes)
+            sent_codes.clear()
+            logger_instance.info(f"🔄 已清空代码去重集合（共 {codes_count} 个代码），新的一天开始")
+            
+            # 等待 2 分钟，确保轮转完成后再继续
+            time.sleep(120)
+            
+        except Exception as e:
+            try:
+                logger_instance.error(f"❌ 日志轮转调度器错误: {e}", exc_info=True)
+            except:
+                print(f"❌ 日志轮转调度器错误: {e}")
+            # 如果出错，等待 1 小时后重试
+            time.sleep(3600)
+
 # 配置日志（在 Django setup 之后，确保清除 Django 添加的 handlers）
 def configure_logging():
     """配置日志系统，确保没有重复的 handlers"""
+    global current_file_handler
+    
     # 清除所有现有的 handlers（包括 Django 可能添加的）
     root_logger = logging.getLogger()
     for handler in root_logger.handlers[:]:
@@ -86,12 +193,12 @@ def configure_logging():
     logger.propagate = False  # 不传播到根 logger，避免重复日志
     
     # 为当前 logger 添加文件 handler（只添加一次）
-    file_handler = logging.FileHandler(log_file, encoding='utf-8')
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(MillisecondFormatter(
+    current_file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    current_file_handler.setLevel(logging.INFO)
+    current_file_handler.setFormatter(MillisecondFormatter(
         '[%(asctime)s] %(levelname)s: %(message)s'
     ))
-    logger.addHandler(file_handler)
+    logger.addHandler(current_file_handler)
     
     # 确保没有 StreamHandler（避免输出到 stdout/stderr，导致重复）
     # 因为 start_all.sh 使用 &>> 重定向 stdout/stderr 到日志文件
@@ -167,6 +274,7 @@ target_channels = [
     -1003538327109,  # 补码频道，使用 code_format_parser
     -1002493460363,  # private_code，使用 rains_team_parser
     -1002252848959,  # fast_code，使用 code_format_parser
+    -1002375522843,  # CodeStats.gg，使用 user_submitted_parser
 ]
 
 # 核心频道列表（用于 openChat 优化，提高更新优先级）
@@ -185,6 +293,7 @@ channel_id_map = {
     -1003538327109: 'code_format_parser',   # 补码频道，解析 Code: stakecode 格式
     -1002493460363: 'rains_team_parser',    # private_code，使用 rains_team_parser
     -1002252848959: 'code_format_parser',    # fast_code，使用 code_format_parser
+    -1002375522843: 'user_submitted_parser', # CodeStats.gg，解析 USER SUBMITTED STAKE CODE 格式
 }
 
 # 频道名称映射（用于日志输出）
@@ -197,6 +306,7 @@ channel_name_map = {
     -1003538327109: '补码频道',          # 补码频道
     -1002493460363: 'private_code',     # private_code
     -1002252848959: 'fast_code',        # fast_code
+    -1002375522843: 'CodeStats.gg',     # CodeStats.gg
 }
 
 # 代码转发目标频道
@@ -211,6 +321,7 @@ connected_clients = set()  # 存储所有连接的客户端
 client_username_map = {}  # 存储客户端 WebSocket 到 username 的映射 {websocket: username}
 client_user_id_map = {}  # 存储客户端 WebSocket 到 user_id 的映射 {websocket: user_id}
 client_addr_map = {}  # 存储客户端 WebSocket 到地址的映射 {websocket: (ip, port)}
+client_connect_time_map = {}  # 存储客户端 WebSocket 到连接时间的映射 {websocket: datetime}
 websocket_loop = None  # 存储 WebSocket 服务器的事件循环
 sent_codes = set()  # 存储已下发的代码（用于去重，避免重复下发）
 
@@ -586,15 +697,18 @@ def save_connections_to_file():
             addr = client_addr_map.get(client)
             username = client_username_map.get(client, '-')
             user_id = client_user_id_map.get(client, '-')
+            connect_time = client_connect_time_map.get(client)
             
             if addr:
                 ip, port = addr
+                # 使用连接时间而不是当前时间
+                connect_time_str = connect_time.isoformat() if connect_time else datetime.now().isoformat()
                 connections.append({
                     'username': username,
                     'user_id': user_id,
                     'ip': ip,
                     'port': port,
-                    'last_update': datetime.now().isoformat()
+                    'connected_at': connect_time_str  # 改为 connected_at，表示连接时间
                 })
         
         data = {
@@ -706,6 +820,7 @@ async def websocket_handler(websocket, path):
     client_username = None  # 客户端用户名（等待初始化消息）
     connected_clients.add(websocket)
     client_addr_map[websocket] = client_addr  # 保存地址映射
+    client_connect_time_map[websocket] = datetime.now()  # 记录连接时间
     save_connections_to_file()  # 保存连接信息
     
     # 设置 WebSocket 超时和保活参数
@@ -821,6 +936,7 @@ async def websocket_handler(websocket, path):
         client_username_map.pop(websocket, None)  # 移除 username 映射
         client_user_id_map.pop(websocket, None)  # 移除 user_id 映射
         client_addr_map.pop(websocket, None)  # 移除地址映射
+        client_connect_time_map.pop(websocket, None)  # 移除连接时间映射
         save_connections_to_file()  # 更新连接信息
 
 
@@ -1324,6 +1440,11 @@ if __name__ == "__main__":
             logger.warning(f"⚠️ 日志配置异常: {len(logger.handlers)} 个 handlers: {handler_info}")
             # 重新配置日志
             logger = configure_logging()
+        
+        # 启动日志轮转调度器（后台线程）
+        rotation_thread = Thread(target=log_rotation_scheduler, daemon=True)
+        rotation_thread.start()
+        logger.info("📅 日志轮转调度器已启动（每天北京时间 0 点自动轮转）")
         
         logger.info("🎧 TDLib 监听启动，等待消息...")
         logger.info(f"📡 WebSocket 服务地址: ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}")

@@ -41,7 +41,7 @@ def format_connections(connections, service_name):
     
     print(f"\n{service_name} 连接列表 (共 {len(sorted_connections)} 个):")
     print("=" * 100)
-    print(f"{'序号':<6} {'Username':<20} {'用户标识':<12} {'IP 地址':<20} {'端口':<8} {'最后更新':<20}")
+    print(f"{'序号':<6} {'Username':<20} {'用户标识':<12} {'IP 地址':<20} {'端口':<8} {'连接时间':<20}")
     print("-" * 100)
     
     for idx, conn in enumerate(sorted_connections, 1):
@@ -49,17 +49,18 @@ def format_connections(connections, service_name):
         user_id = conn.get('user_id', '-')
         ip = conn.get('ip', '-')
         port = conn.get('port', '-')
-        last_update = conn.get('last_update', '-')
+        # 优先使用 connected_at，如果没有则使用 last_update（兼容旧数据）
+        connect_time = conn.get('connected_at') or conn.get('last_update', '-')
         
         # 格式化时间
-        if last_update != '-':
+        if connect_time != '-':
             try:
-                dt = datetime.fromisoformat(last_update.replace('Z', '+00:00'))
-                last_update = dt.strftime('%Y-%m-%d %H:%M:%S')
+                dt = datetime.fromisoformat(connect_time.replace('Z', '+00:00'))
+                connect_time = dt.strftime('%Y-%m-%d %H:%M:%S')
             except:
                 pass
         
-        print(f"{idx:<6} {username:<20} {user_id:<12} {ip:<20} {str(port):<8} {last_update:<20}")
+        print(f"{idx:<6} {username:<20} {user_id:<12} {ip:<20} {str(port):<8} {connect_time:<20}")
     
     print("=" * 100)
 

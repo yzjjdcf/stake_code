@@ -23,8 +23,12 @@ fi
 echo ""
 
 # 检查进程（另一种方式）
-echo "🔍 查找 listener.py 进程："
-ps aux | grep listener.py | grep -v grep || echo "   未找到运行中的 listener.py 进程"
+# 注意：listener.py 已废弃，现在使用 listener_tdlib.py
+echo "🔍 查找 listener.py 进程（已废弃，仅供参考）："
+ps aux | grep "listener.py[^_]" | grep -v grep || echo "   未找到运行中的 listener.py 进程（正常，已废弃）"
+echo ""
+echo "🔍 查找 listener_tdlib.py 进程（当前使用的）："
+ps aux | grep listener_tdlib.py | grep -v grep || echo "   未找到运行中的 listener_tdlib.py 进程"
 
 echo ""
 

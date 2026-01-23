@@ -97,6 +97,33 @@ def parse_code_code_format(text):
     return None
 
 
+def parse_code_user_submitted(text):
+    """解析 CodeStats.gg 频道的 USER SUBMITTED STAKE CODE 格式"""
+    if not text:
+        return None
+    
+    # 首先检查消息是否包含 "USER SUBMITTED STAKE CODE"（不区分大小写）
+    if 'USER SUBMITTED STAKE CODE' not in text.upper():
+        return None
+    
+    # 查找 "Code: " 后面的代码（支持多种格式）
+    patterns = [
+        r'[Cc]ode\s*:\s*([a-zA-Z0-9]+)',  # Code: staketr2r6z9f
+        r'[Cc]ode:\s*([a-zA-Z0-9]+)',     # Code:staketr2r6z9f
+        r'-\s*[Cc]ode:\s*([a-zA-Z0-9]+)', # - Code: staketr2r6z9f
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            code = match.group(1).strip()
+            # 验证代码格式（只包含字母和数字）
+            if re.match(r'^[a-zA-Z0-9]+$', code):
+                return code.lower()
+    
+    return None
+
+
 def parse_code_default(text):
     """默认解析器"""
     if text:
@@ -110,6 +137,7 @@ CODE_PARSERS = {
     'rains_team_parser': parse_code_rains_team,
     'daily_code_parser': parse_code_daily_code,
     'code_format_parser': parse_code_code_format,
+    'user_submitted_parser': parse_code_user_submitted,
     'default_parser': parse_code_default,
 }
 

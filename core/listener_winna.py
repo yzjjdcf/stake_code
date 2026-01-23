@@ -196,6 +196,7 @@ WEBSOCKET_PORT = 8766  # Winna 使用 8766，与 Stake 的 8765 区分
 connected_clients = set()  # 存储所有连接的客户端
 client_username_map = {}  # 存储客户端 WebSocket 到 username 的映射 {websocket: username}
 client_addr_map = {}  # 存储客户端 WebSocket 到地址的映射 {websocket: (ip, port)}
+client_connect_time_map = {}  # 存储客户端 WebSocket 到连接时间的映射 {websocket: datetime}
 websocket_loop = None  # 存储 WebSocket 服务器的事件循环
 
 # 线程池执行器（用于异步处理消息，避免阻塞主线程）
@@ -525,48 +526,17 @@ def save_connections_to_file():
         for client in connected_clients:
             addr = client_addr_map.get(client)
             username = client_username_map.get(client, '-')
+            connect_time = client_connect_time_map.get(client)
             
             if addr:
                 ip, port = addr
+                # 使用连接时间而不是当前时间
+                connect_time_str = connect_time.isoformat() if connect_time else datetime.now().isoformat()
                 connections.append({
                     'username': username,
                     'ip': ip,
                     'port': port,
-                    'last_update': datetime.now().isoformat()
-                })
-        
-        data = {
-            'service': 'winna',
-            'port': WEBSOCKET_PORT,
-            'total_connections': len(connections),
-            'last_update': datetime.now().isoformat(),
-            'connections': connections
-        }
-        
-        with open(conn_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.debug(f"保存连接信息失败: {e}")
-
-
-def save_connections_to_file():
-    """保存当前连接信息到文件"""
-    try:
-        conn_file = os.path.join(project_root, 'db', 'websocket_winna_connections.json')
-        os.makedirs(os.path.dirname(conn_file), exist_ok=True)
-        
-        connections = []
-        for client in connected_clients:
-            addr = client_addr_map.get(client)
-            username = client_username_map.get(client, '-')
-            
-            if addr:
-                ip, port = addr
-                connections.append({
-                    'username': username,
-                    'ip': ip,
-                    'port': port,
-                    'last_update': datetime.now().isoformat()
+                    'connected_at': connect_time_str  # 改为 connected_at，表示连接时间
                 })
         
         data = {
@@ -635,6 +605,7 @@ async def websocket_handler(websocket, path):
     client_username = None  # 客户端用户名（等待初始化消息）
     connected_clients.add(websocket)
     client_addr_map[websocket] = client_addr  # 保存地址映射
+    client_connect_time_map[websocket] = datetime.now()  # 记录连接时间
     logger.info(f"🔌 新客户端连接: {client_addr}")
     save_connections_to_file()  # 保存连接信息
     
@@ -697,6 +668,7 @@ async def websocket_handler(websocket, path):
         connected_clients.discard(websocket)
         client_username_map.pop(websocket, None)  # 移除 username 映射
         client_addr_map.pop(websocket, None)  # 移除地址映射
+        client_connect_time_map.pop(websocket, None)  # 移除连接时间映射
         logger.info(f"🔌 客户端已移除: {client_addr} (剩余连接: {len(connected_clients)})")
         save_connections_to_file()  # 更新连接信息
 
