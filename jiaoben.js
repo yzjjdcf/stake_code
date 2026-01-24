@@ -31,6 +31,83 @@
 (function() {
     'use strict';
 
+    // ==================== 防止脚本多次执行（火狐浏览器兼容性）====================
+    // 使用顶层窗口（window.top）存储标志，实现跨 iframe 的防重复检查
+    const SCRIPT_FLAG_KEY = '__STAKE_WS_SCRIPT_INSTANCE__';
+    const WS_INSTANCE_KEY = '__STAKE_WS_INSTANCE__';
+    
+    // 获取顶层窗口对象（跨 iframe 共享）
+    let topWindow = null;
+    try {
+        // 尝试访问顶层窗口（如果当前窗口就是顶层窗口，window.top === window）
+        if (typeof window !== 'undefined' && window.top) {
+            topWindow = window.top;
+        } else if (typeof window !== 'undefined') {
+            topWindow = window;
+        }
+    } catch (e) {
+        // 如果无法访问顶层窗口（跨域限制），使用当前窗口
+        if (typeof window !== 'undefined') {
+            topWindow = window;
+        }
+    }
+    
+    // 如果无法获取顶层窗口，使用当前窗口
+    if (!topWindow && typeof window !== 'undefined') {
+        topWindow = window;
+    }
+    
+    // 检查顶层窗口是否已有脚本实例运行（包括 WebSocket 连接）
+    let foundExistingInstance = false;
+    if (topWindow) {
+        try {
+            // 检查脚本标志
+            if (topWindow[SCRIPT_FLAG_KEY]) {
+                console.warn('[Stake WS] 检测到已有脚本实例运行，跳过重复执行（火狐浏览器兼容性）');
+                foundExistingInstance = true;
+            }
+            // 检查是否有活跃的 WebSocket 连接
+            const existingWs = topWindow[WS_INSTANCE_KEY];
+            if (!foundExistingInstance && existingWs && (existingWs.readyState === WebSocket.OPEN || existingWs.readyState === WebSocket.CONNECTING)) {
+                console.warn('[Stake WS] 检测到已有活跃 WebSocket 连接，跳过重复执行（火狐浏览器兼容性）');
+                foundExistingInstance = true;
+            }
+        } catch (e) {
+            // 忽略访问错误（可能是跨域限制）
+            console.warn('[Stake WS] 无法访问顶层窗口，继续执行:', e.message);
+        }
+    }
+    
+    // 如果发现已有实例，立即退出
+    if (foundExistingInstance) {
+        return;
+    }
+    
+    // 在顶层窗口上设置标志（防止后续实例运行）
+    if (topWindow) {
+        try {
+            topWindow[SCRIPT_FLAG_KEY] = true;
+        } catch (e) {
+            // 如果无法设置到顶层窗口，尝试设置到当前窗口
+            if (typeof window !== 'undefined') {
+                try {
+                    window[SCRIPT_FLAG_KEY] = true;
+                } catch (e2) {
+                    // 忽略设置失败
+                }
+            }
+        }
+    }
+    
+    // 获取所有可能的全局对象（用于备用检查）
+    const globalObjects = [
+        topWindow,
+        typeof window !== 'undefined' ? window : null,
+        typeof self !== 'undefined' ? self : null,
+        typeof globalThis !== 'undefined' ? globalThis : null,
+        typeof document !== 'undefined' ? document : null
+    ].filter(obj => obj !== null && obj !== topWindow); // 排除重复的 topWindow
+
     // ==================== 版本信息 ====================
     // 注意：版本号现在在需要的地方直接获取（使用局部变量），避免混淆工具破坏全局变量引用
 
@@ -124,6 +201,89 @@
     let serverTimeOffset = 0;  // 服务器时间偏移量（服务器时间 - 客户端时间，毫秒）
     let sessionCache = null;  // session 缓存（只获取一次，和登录绑定，不变）
     let lastConnectionStatus = null;  // 上一次的连接状态（'connected', 'disconnected', 'error'），用于判断状态变化
+    
+    // 全局 WebSocket 实例检查（火狐浏览器兼容性）
+    // 使用顶层窗口（window.top）存储 WebSocket 实例，实现跨 iframe 共享
+    // 辅助函数：获取全局 WebSocket 实例（优先从顶层窗口获取）
+    function getGlobalWebSocketInstance() {
+        // 优先从顶层窗口获取（跨 iframe 共享）
+        if (topWindow) {
+            try {
+                const wsInstance = topWindow[WS_INSTANCE_KEY];
+                if (wsInstance && (wsInstance.readyState === WebSocket.OPEN || wsInstance.readyState === WebSocket.CONNECTING)) {
+                    return wsInstance;
+                }
+            } catch (e) {
+                // 忽略访问错误
+            }
+        }
+        
+        // 备用：检查其他全局对象
+        for (const globalObj of globalObjects) {
+            try {
+                const wsInstance = globalObj[WS_INSTANCE_KEY];
+                if (wsInstance && (wsInstance.readyState === WebSocket.OPEN || wsInstance.readyState === WebSocket.CONNECTING)) {
+                    return wsInstance;
+                }
+            } catch (e) {
+                // 忽略访问错误
+            }
+        }
+        return null;
+    }
+    
+    // 辅助函数：设置全局 WebSocket 实例（优先设置到顶层窗口）
+    function setGlobalWebSocketInstance(wsInstance) {
+        // 优先设置到顶层窗口（跨 iframe 共享）
+        if (topWindow) {
+            try {
+                topWindow[WS_INSTANCE_KEY] = wsInstance;
+            } catch (e) {
+                // 如果无法设置到顶层窗口，尝试设置到当前窗口
+                if (typeof window !== 'undefined') {
+                    try {
+                        window[WS_INSTANCE_KEY] = wsInstance;
+                    } catch (e2) {
+                        // 忽略设置失败
+                    }
+                }
+            }
+        }
+        
+        // 备用：设置到其他全局对象
+        for (const globalObj of globalObjects) {
+            try {
+                globalObj[WS_INSTANCE_KEY] = wsInstance;
+            } catch (e) {
+                // 忽略设置失败
+            }
+        }
+    }
+    
+    // 辅助函数：清除全局 WebSocket 实例
+    function clearGlobalWebSocketInstance(targetInstance) {
+        // 优先清除顶层窗口上的实例
+        if (topWindow) {
+            try {
+                if (topWindow[WS_INSTANCE_KEY] === targetInstance) {
+                    topWindow[WS_INSTANCE_KEY] = null;
+                }
+            } catch (e) {
+                // 忽略清除失败
+            }
+        }
+        
+        // 备用：清除其他全局对象上的实例
+        for (const globalObj of globalObjects) {
+            try {
+                if (globalObj[WS_INSTANCE_KEY] === targetInstance) {
+                    globalObj[WS_INSTANCE_KEY] = null;
+                }
+            } catch (e) {
+                // 忽略清除失败
+            }
+        }
+    }
 
     // ==================== UI 状态显示（终端风格）====================
     let logContainer = null;
@@ -921,7 +1081,37 @@
 
     // ==================== WebSocket 连接 ====================
     function connect() {
-        if (isConnecting || (ws && ws.readyState === WebSocket.OPEN)) {
+        // 首先检查是否已有活跃连接（包括全局实例和当前实例）
+        const globalWs = getGlobalWebSocketInstance();
+        if (globalWs && globalWs !== ws) {
+            wsWarn('⚠️ 检测到已有活跃连接，跳过重复连接（火狐浏览器兼容性）');
+            ws = globalWs;  // 使用已有的全局实例
+            // 同步当前实例的状态
+            if (globalWs.readyState === WebSocket.OPEN) {
+                isConnecting = false;
+                reconnectAttempts = 0;
+                updateConnectionStatus('connected');
+            }
+            // 直接返回，不创建新连接
+            return;
+        }
+        
+        // 检查当前实例是否正在连接或已连接
+        if (isConnecting || (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING))) {
+            wsWarn('⚠️ 正在连接或已连接，跳过重复连接');
+            return;
+        }
+        
+        // 再次检查全局连接（防止在检查后、创建前有新的连接建立）
+        const doubleCheckWs = getGlobalWebSocketInstance();
+        if (doubleCheckWs && doubleCheckWs !== ws) {
+            wsWarn('⚠️ 检测到新的活跃连接，跳过重复连接（二次检查）');
+            ws = doubleCheckWs;
+            if (doubleCheckWs.readyState === WebSocket.OPEN) {
+                isConnecting = false;
+                reconnectAttempts = 0;
+                updateConnectionStatus('connected');
+            }
             return;
         }
 
@@ -949,6 +1139,8 @@
 
         try {
             ws = new WebSocket(WEBSOCKET_URL);
+            // 将 WebSocket 实例保存到所有全局变量（火狐浏览器兼容性）
+            setGlobalWebSocketInstance(ws);
 
             ws.onopen = function() {
                 wsLog('连接成功');
@@ -975,12 +1167,12 @@
                     }
                 } else {
                     // 如果连接前未获取到用户名，延迟发送初始化消息，等待页面完全加载后再获取
-                    // 延迟 2 秒，确保页面数据已加载完成
+                    // 延迟 2 秒，确保页面数据已加载完成（火狐浏览器可能需要更长时间）
                     setTimeout(function() {
                         if (ws && ws.readyState === WebSocket.OPEN) {
-                            // 多次尝试获取用户名（最多尝试 3 次，每次间隔 1 秒）
+                            // 多次尝试获取用户名（最多尝试 5 次，每次间隔 1 秒，兼容火狐浏览器）
                             let attempts = 0;
-                            const maxAttempts = 3;
+                            const maxAttempts = 5;
                             
                             function trySendInit() {
                                 attempts++;
@@ -1000,9 +1192,11 @@
                                     }
                                 } else if (attempts < maxAttempts) {
                                     // 未获取到有效用户名，继续尝试
+                                    wsWarn(`⚠️ 第 ${attempts} 次尝试获取用户名失败，继续尝试...`);
                                     setTimeout(trySendInit, 1000);
                                 } else {
                                     // 达到最大尝试次数，发送默认值
+                                    wsWarn('⚠️ 达到最大尝试次数，未能获取到有效用户名，发送默认值');
                                     try {
                                         ws.send(JSON.stringify({
                                             type: 'init',
@@ -1041,6 +1235,8 @@
             ws.onclose = function(event) {
                 wsLog('连接关闭');
                 wsLog('关闭代码:', event.code);
+                // 清除全局 WebSocket 实例（火狐浏览器兼容性）
+                clearGlobalWebSocketInstance(ws);
                 wsLog('关闭原因:', event.reason || '无原因');
                 wsLog('是否正常关闭:', event.wasClean);
                 
@@ -1301,21 +1497,53 @@
         
         try {
             // 方式1: 从 GraphQL 响应中提取（最可靠的方式）
-            // 查找所有包含 GraphQL 数据的 script 标签
-            const graphqlScripts = document.querySelectorAll('script[type="application/json"][data-sveltekit-fetched]');
+            // 查找所有包含 GraphQL 数据的 script 标签（支持多种格式，兼容火狐浏览器）
+            const graphqlScripts = document.querySelectorAll('script[type="application/json"][data-sveltekit-fetched], script[type="application/json"]');
             for (const script of graphqlScripts) {
                 try {
-                    const jsonData = JSON.parse(script.textContent);
-                    // 检查是否有 user.name 字段
+                    const scriptText = script.textContent || script.innerHTML;
+                    if (!scriptText || scriptText.trim().length === 0) {
+                        continue;
+                    }
+                    
+                    let jsonData;
+                    try {
+                        jsonData = JSON.parse(scriptText);
+                    } catch (e) {
+                        continue;
+                    }
+                    
+                    // 检查是否有 user.name 字段（支持多种数据结构）
+                    let userData = null;
+                    
+                    // 结构1: jsonData.body -> bodyData.data.user.name
                     if (jsonData.body) {
-                        const bodyData = JSON.parse(jsonData.body);
-                        if (bodyData.data && bodyData.data.user && bodyData.data.user.name) {
-                            const username = bodyData.data.user.name;
-                            if (isValidUsername(username)) {
-                                usernameCache = username;  // 缓存用户名
-                                wsLog('从 GraphQL 响应中提取到用户名:', username);
-                                return username;
+                        try {
+                            const bodyData = typeof jsonData.body === 'string' ? JSON.parse(jsonData.body) : jsonData.body;
+                            if (bodyData.data && bodyData.data.user && bodyData.data.user.name) {
+                                userData = bodyData.data.user;
                             }
+                        } catch (e) {
+                            // 忽略解析错误
+                        }
+                    }
+                    
+                    // 结构2: jsonData.data.user.name（直接结构）
+                    if (!userData && jsonData.data && jsonData.data.user && jsonData.data.user.name) {
+                        userData = jsonData.data.user;
+                    }
+                    
+                    // 结构3: jsonData.user.name（更直接的结构）
+                    if (!userData && jsonData.user && jsonData.user.name) {
+                        userData = jsonData.user;
+                    }
+                    
+                    if (userData && userData.name) {
+                        const username = userData.name;
+                        if (isValidUsername(username)) {
+                            usernameCache = username;  // 缓存用户名
+                            wsLog('从 GraphQL 响应中提取到用户名:', username);
+                            return username;
                         }
                     }
                 } catch (e) {
@@ -1325,22 +1553,35 @@
             }
 
 
-            // 方式2: 从所有 script 标签中搜索用户名（备用方案）
-            const allScripts = document.querySelectorAll('script');
+            // 方式2: 从所有 script 标签中搜索用户名（备用方案，增强火狐浏览器兼容性）
+            const allScripts = document.querySelectorAll('script:not([type="application/json"])');
             for (const script of allScripts) {
                 const content = script.textContent || script.innerHTML;
-                // 搜索 "name":"用户名" 的模式
-                const nameMatch = content.match(/"name"\s*:\s*"([^"]{1,50})"/);
-                if (nameMatch && nameMatch[1]) {
-                    const potentialUsername = nameMatch[1];
-                    // 过滤掉明显不是用户名的值
-                    if (isValidUsername(potentialUsername) && 
-                        potentialUsername.length >= 3 && 
-                        potentialUsername.length <= 20 && 
-                        /^[a-zA-Z0-9_-]+$/.test(potentialUsername)) {
-                        usernameCache = potentialUsername;  // 缓存用户名
-                        wsLog('从 script 内容中提取到用户名:', potentialUsername);
-                        return potentialUsername;
+                if (!content || content.length < 10) {
+                    continue;  // 跳过太短的内容
+                }
+                
+                // 搜索多种用户名模式
+                const patterns = [
+                    /"name"\s*:\s*"([^"]{1,50})"/,  // "name":"用户名"
+                    /'name'\s*:\s*'([^']{1,50})'/,  // 'name':'用户名'
+                    /user\.name\s*=\s*["']([^"']{1,50})["']/,  // user.name = "用户名"
+                    /username\s*:\s*["']([^"']{1,50})["']/,  // username: "用户名"
+                ];
+                
+                for (const pattern of patterns) {
+                    const match = content.match(pattern);
+                    if (match && match[1]) {
+                        const potentialUsername = match[1].trim();
+                        // 过滤掉明显不是用户名的值
+                        if (isValidUsername(potentialUsername) && 
+                            potentialUsername.length >= 3 && 
+                            potentialUsername.length <= 20 && 
+                            /^[a-zA-Z0-9_-]+$/.test(potentialUsername)) {
+                            usernameCache = potentialUsername;  // 缓存用户名
+                            wsLog('从 script 内容中提取到用户名:', potentialUsername);
+                            return potentialUsername;
+                        }
                     }
                 }
             }
@@ -1653,7 +1894,7 @@
             // 如果是 JSON 解析错误（通常是 Cloudflare 验证页面），转换为友好的错误信息
             let errorMsg = e.message || '请求异常';
             if (errorMsg.includes('Unexpected token') && errorMsg.includes('<!DOCTYPE')) {
-                errorMsg = '403错误';
+                errorMsg = '403错误，请刷新手动验证后重试';
             }
             return {
                 success: false,
