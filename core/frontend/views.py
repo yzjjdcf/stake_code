@@ -104,7 +104,7 @@ def account_list(request):
 @login_required
 @require_http_methods(["POST"])
 def account_add(request):
-    """添加账号"""
+    """添加账号（账号唯一性：同一账号只能属于一个用户，后添加的会删除旧记录）"""
     stake_account_id = request.POST.get('stake_account_id', '').strip()
     is_active = request.POST.get('is_active', 'on') == 'on'  # 默认激活
     
@@ -112,10 +112,42 @@ def account_add(request):
         messages.error(request, '账号ID不能为空')
         return redirect('frontend:account_list')
     
-    # 检查是否已存在
-    if StakeAccount.objects.filter(user=request.user, stake_account_id=stake_account_id).exists():
-        messages.error(request, '该账号已存在')
+    # 检查当前用户是否已存在该账号
+    existing_account = StakeAccount.objects.filter(user=request.user, stake_account_id=stake_account_id).first()
+    if existing_account:
+        # 如果当前用户已有该账号，只更新激活状态
+        old_is_active = existing_account.is_active
+        existing_account.is_active = is_active
+        existing_account.save()
+        
+        # 如果激活状态改变，断开该账号的所有连接
+        if old_is_active != is_active:
+            from core.listener_tdlib import disconnect_account_connections_sync
+            disconnect_count = disconnect_account_connections_sync(
+                stake_account_id,
+                "账号激活状态已变更" if is_active else "账号已停用"
+            )
+            if disconnect_count > 0:
+                messages.info(request, f'账号 {stake_account_id} 状态已更新，已断开 {disconnect_count} 个连接')
+        
+        messages.success(request, f'账号 {stake_account_id} 已存在，已更新激活状态')
         return redirect('frontend:account_list')
+    
+    # 检查其他用户是否已有该账号，如果有则删除（确保账号唯一性）
+    other_accounts = StakeAccount.objects.filter(stake_account_id=stake_account_id).exclude(user=request.user)
+    if other_accounts.exists():
+        deleted_count = other_accounts.count()
+        # 在删除前，先断开该账号的所有连接（因为账号归属已变更）
+        from core.listener_tdlib import disconnect_account_connections_sync
+        disconnect_count = disconnect_account_connections_sync(
+            stake_account_id,
+            "账号归属已变更"
+        )
+        other_accounts.delete()
+        if disconnect_count > 0:
+            messages.info(request, f'账号 {stake_account_id} 已从 {deleted_count} 个其他用户下移除，已断开 {disconnect_count} 个连接，现在归属于您')
+        else:
+            messages.info(request, f'账号 {stake_account_id} 已从 {deleted_count} 个其他用户下移除，现在归属于您')
     
     # 创建账号
     StakeAccount.objects.create(
@@ -134,9 +166,20 @@ def account_delete(request, account_id):
     """删除账号"""
     account = get_object_or_404(StakeAccount, id=account_id, user=request.user)
     stake_account_id = account.stake_account_id
+    
+    # 在删除前，先断开该账号的所有连接
+    from core.listener_tdlib import disconnect_account_connections_sync
+    disconnect_count = disconnect_account_connections_sync(
+        stake_account_id,
+        "账号已删除"
+    )
+    
     account.delete()
     
-    messages.success(request, f'账号 {stake_account_id} 已删除')
+    if disconnect_count > 0:
+        messages.success(request, f'账号 {stake_account_id} 已删除，已断开 {disconnect_count} 个连接')
+    else:
+        messages.success(request, f'账号 {stake_account_id} 已删除')
     return redirect('frontend:account_list')
 
 
@@ -145,8 +188,22 @@ def account_delete(request, account_id):
 def account_toggle_active(request, account_id):
     """切换账号激活状态"""
     account = get_object_or_404(StakeAccount, id=account_id, user=request.user)
+    old_is_active = account.is_active
     account.is_active = not account.is_active
     account.save()
+    
+    # 如果账号被停用，断开该账号的所有连接
+    if not account.is_active:
+        from core.listener_tdlib import disconnect_account_connections_sync
+        disconnect_count = disconnect_account_connections_sync(
+            account.stake_account_id,
+            "账号已停用"
+        )
+        return JsonResponse({
+            'success': True,
+            'is_active': account.is_active,
+            'disconnect_count': disconnect_count
+        })
     
     return JsonResponse({'success': True, 'is_active': account.is_active})
 

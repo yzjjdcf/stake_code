@@ -115,7 +115,7 @@
     // 注意：HTTPS 页面必须使用 wss:// (加密 WebSocket)，不能使用 ws://
     const WEBSOCKET_URL = 'wss://stakefav.xyz';  // 使用域名（通过 nginx 反向代理）
     const RECONNECT_DELAY = 5000;  // 重连延迟（毫秒）
-    const MAX_RECONNECT_ATTEMPTS = 10;  // 最大重连次数
+    // 无限重连：不设置最大重连次数限制
     
     // ==================== 调试模式开关 ====================
     // true: debug 模式，打印所有日志
@@ -150,7 +150,7 @@
     // ==================== 用户标识 ====================
     // 用户唯一标识符（用于区分不同使用者，一个用户可以有多个 Stake 账号）
     // 注意：为每个用户生成脚本时，需要修改此值
-    const USER_ID = 'KK';  // 请修改为实际的用户标识符
+    const USER_ID = 'yzjjdcf';  // 请修改为实际的用户标识符
     
     // 用户名缓存（避免 CSP 错误后无法获取用户名）
     let usernameCache = null;
@@ -1283,18 +1283,11 @@
                 }
                 
                 // 自动重连
-                if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-                    reconnectAttempts++;
-                    updateConnectionStatus('connecting');
-                    wsLog(`尝试重连 ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}...`);
-                    // 不添加日志，因为状态没有变化（仍然是失败状态）
-                    setTimeout(connect, RECONNECT_DELAY);
-                } else {
-                    updateConnectionStatus('error');
-                    wsError('达到最大重连次数，请刷新页面');
-                    addLog('❌ 连接失败，联系管理员', 'info');
-                    // 不添加日志，因为状态没有变化
-                }
+                // 自动重连（无限重连）
+                reconnectAttempts++;
+                updateConnectionStatus('connecting');
+                // 不添加日志，因为状态没有变化（仍然是失败状态）
+                setTimeout(connect, RECONNECT_DELAY);
             };
 
         } catch (e) {
@@ -1553,39 +1546,6 @@
             }
 
 
-            // 方式2: 从所有 script 标签中搜索用户名（备用方案，增强火狐浏览器兼容性）
-            const allScripts = document.querySelectorAll('script:not([type="application/json"])');
-            for (const script of allScripts) {
-                const content = script.textContent || script.innerHTML;
-                if (!content || content.length < 10) {
-                    continue;  // 跳过太短的内容
-                }
-                
-                // 搜索多种用户名模式
-                const patterns = [
-                    /"name"\s*:\s*"([^"]{1,50})"/,  // "name":"用户名"
-                    /'name'\s*:\s*'([^']{1,50})'/,  // 'name':'用户名'
-                    /user\.name\s*=\s*["']([^"']{1,50})["']/,  // user.name = "用户名"
-                    /username\s*:\s*["']([^"']{1,50})["']/,  // username: "用户名"
-                ];
-                
-                for (const pattern of patterns) {
-                    const match = content.match(pattern);
-                    if (match && match[1]) {
-                        const potentialUsername = match[1].trim();
-                        // 过滤掉明显不是用户名的值
-                        if (isValidUsername(potentialUsername) && 
-                            potentialUsername.length >= 3 && 
-                            potentialUsername.length <= 20 && 
-                            /^[a-zA-Z0-9_-]+$/.test(potentialUsername)) {
-                            usernameCache = potentialUsername;  // 缓存用户名
-                            wsLog('从 script 内容中提取到用户名:', potentialUsername);
-                            return potentialUsername;
-                        }
-                    }
-                }
-            }
-            
 
             // 方式3: 从 window 全局对象中获取（如果 Stake 页面有暴露）
             try {

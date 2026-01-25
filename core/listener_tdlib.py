@@ -47,6 +47,9 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'manager.settings')
 import django
 django.setup()
 
+# Django setup 之后，导入 Django 模型（确保在 Django 完全初始化后导入）
+from frontend.models import StakeAccount, UserProfile
+
 # Django setup 之后，重新配置日志（清除 Django 可能添加的 handlers）
 from parsers import CODE_PARSERS, parse_code_default
 from video_processor import parse_code_daily_code_async
@@ -322,6 +325,10 @@ client_username_map = {}  # 存储客户端 WebSocket 到 username 的映射 {we
 client_user_id_map = {}  # 存储客户端 WebSocket 到 user_id 的映射 {websocket: user_id}
 client_addr_map = {}  # 存储客户端 WebSocket 到地址的映射 {websocket: (ip, port)}
 client_connect_time_map = {}  # 存储客户端 WebSocket 到连接时间的映射 {websocket: datetime}
+account_to_websocket_v1 = {}  # 存储账号到 V1 WebSocket 的映射 {username: set(websockets)}，同一账号可以有多个V1连接
+account_to_websocket_v2 = {}  # 存储账号到 V2 WebSocket 的映射 {username: set(websockets)}，同一账号可以有多个V2连接
+websocket_version_map = {}  # 存储 WebSocket 到版本的映射 {websocket: 'v1' or 'v2'}
+websocket_user_map = {}  # 存储 WebSocket 到用户的映射 {websocket: User对象}，用于V2数据归属（在验证时确定）
 websocket_loop = None  # 存储 WebSocket 服务器的事件循环
 sent_codes = set()  # 存储已下发的代码（用于去重，避免重复下发）
 
@@ -799,8 +806,213 @@ async def broadcast_to_clients(message_data, filter_usernames=None):
         logger.info(f"📡 测试频道消息已发送给 {sent_count} 个测试账号客户端")
 
 
+async def verify_username_for_v2(username):
+    """验证 V2 客户端的用户名是否绑定到用户且激活
+    
+    Returns:
+        tuple: (is_valid, user_obj, error_message)
+            - is_valid: 是否验证通过
+            - user_obj: 关联的用户对象（如果验证通过）
+            - error_message: 错误信息（如果验证失败）
+    """
+    try:
+        from asgiref.sync import sync_to_async
+        
+        # 定义同步函数：检查账号是否存在且激活
+        def check_account():
+            try:
+                # 由于账号唯一性保证（一个账号只能属于一个用户），直接查找即可
+                account = StakeAccount.objects.filter(
+                    stake_account_id=username,
+                    is_active=True
+                ).first()
+                
+                if account:
+                    return account.user  # 返回用户对象
+                else:
+                    return None
+            except Exception as e:
+                logger.error(f"❌ 验证用户失败: {e}", exc_info=True)
+                raise
+        
+        # 使用 sync_to_async 异步执行
+        user_obj = await sync_to_async(check_account)()
+        
+        if user_obj:
+            return True, user_obj, None  # 验证通过，返回用户对象
+        else:
+            return False, None, "账号未绑定或未激活"
+    except Exception as e:
+        error_msg = str(e)
+        # 截断过长的错误消息（WebSocket 关闭帧 reason 不能超过 123 字节）
+        if len(error_msg) > 100:
+            error_msg = error_msg[:100] + "..."
+        logger.error(f"❌ 验证用户: {error_msg}", exc_info=True)
+        return False, None, f"验证失败: {error_msg}"
+
+
+async def disconnect_account_connections(username, reason="账号状态已变更"):
+    """断开指定账号的所有连接（V1 和 V2）
+    
+    Args:
+        username: 账号用户名
+        reason: 断开原因
+    """
+    try:
+        disconnected_count = 0
+        
+        # 断开 V1 连接
+        v1_websockets = account_to_websocket_v1.get(username, set()).copy()
+        for websocket in v1_websockets:
+            if not websocket.closed:
+                try:
+                    await websocket.close(code=1000, reason=reason)
+                    disconnected_count += 1
+                except:
+                    pass
+                # 清理连接
+                account_to_websocket_v1.get(username, set()).discard(websocket)
+                connected_clients.discard(websocket)
+                client_username_map.pop(websocket, None)
+                client_user_id_map.pop(websocket, None)
+                client_addr_map.pop(websocket, None)
+                client_connect_time_map.pop(websocket, None)
+                websocket_version_map.pop(websocket, None)
+        
+        # 断开 V2 连接
+        v2_websockets = account_to_websocket_v2.get(username, set()).copy()
+        for websocket in v2_websockets:
+            if not websocket.closed:
+                try:
+                    await websocket.close(code=1000, reason=reason)
+                    disconnected_count += 1
+                except:
+                    pass
+                # 清理连接
+                account_to_websocket_v2.get(username, set()).discard(websocket)
+                connected_clients.discard(websocket)
+                client_username_map.pop(websocket, None)
+                client_user_id_map.pop(websocket, None)
+                client_addr_map.pop(websocket, None)
+                client_connect_time_map.pop(websocket, None)
+                websocket_version_map.pop(websocket, None)
+                websocket_user_map.pop(websocket, None)
+        
+        # 清空映射（如果为空）
+        if not account_to_websocket_v1.get(username):
+            account_to_websocket_v1.pop(username, None)
+        if not account_to_websocket_v2.get(username):
+            account_to_websocket_v2.pop(username, None)
+        
+        if disconnected_count > 0:
+            logger.info(f"🔌 已断开账号 {username} 的 {disconnected_count} 个连接，原因: {reason}")
+        
+        return disconnected_count
+    except Exception as e:
+        logger.warning(f"⚠️ 断开账号连接时出错: {e}")
+        return 0
+
+
+def disconnect_account_connections_sync(username, reason="账号状态已变更"):
+    """同步包装函数：断开指定账号的所有连接（用于 Django 视图调用）
+    
+    Args:
+        username: 账号用户名
+        reason: 断开原因
+    
+    Returns:
+        int: 断开的连接数
+    """
+    try:
+        global websocket_loop
+        if websocket_loop and websocket_loop.is_running():
+            # 如果事件循环正在运行，使用 run_coroutine_threadsafe 调度
+            future = asyncio.run_coroutine_threadsafe(
+                disconnect_account_connections(username, reason),
+                websocket_loop
+            )
+            try:
+                return future.result(timeout=5)  # 5秒超时
+            except Exception as e:
+                logger.warning(f"⚠️ 断开账号连接超时或出错: {e}")
+                return 0
+        else:
+            # 如果事件循环未运行，尝试获取当前事件循环或创建新的
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # 如果循环正在运行，使用 run_coroutine_threadsafe
+                    future = asyncio.run_coroutine_threadsafe(
+                        disconnect_account_connections(username, reason),
+                        loop
+                    )
+                    return future.result(timeout=5)
+                else:
+                    return loop.run_until_complete(disconnect_account_connections(username, reason))
+            except RuntimeError:
+                # 没有事件循环，创建新的
+                return asyncio.run(disconnect_account_connections(username, reason))
+    except Exception as e:
+        logger.warning(f"⚠️ 同步断开账号连接时出错: {e}")
+        return 0
+
+
+async def disconnect_opposite_version_connections(username, new_websocket, new_version):
+    """断开同一账号的相反版本的连接（互斥逻辑：V1和V2互斥，但同版本可以共存）"""
+    try:
+        if new_version == 'v1':
+            # 新连接是V1，断开所有V2连接
+            v2_websockets = account_to_websocket_v2.get(username, set()).copy()
+            for old_websocket in v2_websockets:
+                if old_websocket != new_websocket and not old_websocket.closed:
+                    logger.info(f"🔌 检测到同一账号 {username} 的V1连接，断开V2连接")
+                    try:
+                        await old_websocket.close(code=1000, reason="同一账号的V1连接已建立，V2连接被断开")
+                    except:
+                        pass
+                    # 清理V2连接
+                    account_to_websocket_v2.get(username, set()).discard(old_websocket)
+                    connected_clients.discard(old_websocket)
+                    client_username_map.pop(old_websocket, None)
+                    client_user_id_map.pop(old_websocket, None)
+                    client_addr_map.pop(old_websocket, None)
+                    client_connect_time_map.pop(old_websocket, None)
+                    websocket_version_map.pop(old_websocket, None)
+            # 清空该账号的V2映射（如果为空）
+            if not account_to_websocket_v2.get(username):
+                account_to_websocket_v2.pop(username, None)
+        elif new_version == 'v2':
+            # 新连接是V2，断开所有V1连接
+            v1_websockets = account_to_websocket_v1.get(username, set()).copy()
+            for old_websocket in v1_websockets:
+                if old_websocket != new_websocket and not old_websocket.closed:
+                    logger.info(f"🔌 检测到同一账号 {username} 的V2连接，断开V1连接")
+                    try:
+                        await old_websocket.close(code=1000, reason="同一账号的V2连接已建立，V1连接被断开")
+                    except:
+                        pass
+                    # 清理V1连接
+                    account_to_websocket_v1.get(username, set()).discard(old_websocket)
+                    connected_clients.discard(old_websocket)
+                    client_username_map.pop(old_websocket, None)
+                    client_user_id_map.pop(old_websocket, None)
+                    client_addr_map.pop(old_websocket, None)
+                    client_connect_time_map.pop(old_websocket, None)
+                    websocket_version_map.pop(old_websocket, None)
+            # 清空该账号的V1映射（如果为空）
+            if not account_to_websocket_v1.get(username):
+                account_to_websocket_v1.pop(username, None)
+    except Exception as e:
+        logger.warning(f"⚠️ 断开相反版本连接时出错: {e}")
+
+
 async def websocket_handler(websocket, path):
-    """WebSocket 连接处理器（增强稳定性：心跳检测、超时控制）"""
+    """WebSocket 连接处理器（增强稳定性：心跳检测、超时控制、V1/V2 互斥）"""
+    # 判断是 V1 还是 V2（通过路径区分）
+    is_v2 = path == '/v2'
+    # 记录连接路径（用于调试）
+    logger.info(f"🔌 WebSocket 连接: 路径={path}, 版本={'V2' if is_v2 else 'V1'}")
+    
     # 获取真实客户端IP（优先从 Nginx 反向代理头中获取）
     client_addr = websocket.remote_address
     try:
@@ -818,9 +1030,13 @@ async def websocket_handler(websocket, path):
         pass
     
     client_username = None  # 客户端用户名（等待初始化消息）
+    client_user_id = None  # 客户端用户标识（V1使用）
+    is_verified = False  # V2 是否已验证
+    connection_version = 'v2' if is_v2 else 'v1'  # 记录连接版本
     connected_clients.add(websocket)
     client_addr_map[websocket] = client_addr  # 保存地址映射
     client_connect_time_map[websocket] = datetime.now()  # 记录连接时间
+    websocket_version_map[websocket] = connection_version  # 记录版本
     save_connections_to_file()  # 保存连接信息
     
     # 设置 WebSocket 超时和保活参数
@@ -829,17 +1045,19 @@ async def websocket_handler(websocket, path):
     ping_interval = 30  # 每30秒发送一次 ping
     
     try:
-        # 发送欢迎消息（包含服务器时间戳，用于客户端时间同步）
-        server_time = datetime.now()
-        server_timestamp_ms = int(server_time.timestamp() * 1000)  # Unix 时间戳（毫秒）
-        
-        welcome_msg = {
-            'type': 'connected',
-            'message': '已连接到代码分发服务',
-            'timestamp': server_time.isoformat(),
-            'server_timestamp_ms': server_timestamp_ms  # 服务器时间戳（毫秒），用于客户端同步时间
-        }
-        await websocket.send(json.dumps(welcome_msg, ensure_ascii=False))
+        # V2 不立即发送欢迎消息，等待验证通过后再发送
+        if not is_v2:
+            # V1 立即发送欢迎消息
+            server_time = datetime.now()
+            server_timestamp_ms = int(server_time.timestamp() * 1000)  # Unix 时间戳（毫秒）
+            
+            welcome_msg = {
+                'type': 'connected',
+                'message': '已连接到代码分发服务',
+                'timestamp': server_time.isoformat(),
+                'server_timestamp_ms': server_timestamp_ms  # 服务器时间戳（毫秒），用于客户端同步时间
+            }
+            await websocket.send(json.dumps(welcome_msg, ensure_ascii=False))
         
         # 启动心跳任务（服务器主动发送 ping）
         async def heartbeat_task():
@@ -863,25 +1081,115 @@ async def websocket_handler(websocket, path):
         
         heartbeat = asyncio.create_task(heartbeat_task())
         
+        # V2 超时检查任务
+        init_timeout_task = None
+        if is_v2:
+            async def init_timeout_check():
+                """V2 超时检查：如果10秒内未收到init消息，断开连接"""
+                await asyncio.sleep(10.0)
+                if not is_verified:
+                    logger.warning(f"⚠️ V2 客户端未在超时时间内发送 init 消息，断开连接: {client_addr}")
+                    try:
+                        await websocket.close(code=1008, reason="未在超时时间内发送初始化消息")
+                    except:
+                        pass
+            init_timeout_task = asyncio.create_task(init_timeout_check())
+        
         try:
             # 保持连接，等待客户端消息（心跳、领取结果等）
             async for message in websocket:
                 try:
                     data = json.loads(message)
                     if data.get('type') == 'init':
-                        # 接收客户端初始化消息（包含 username 和 user_id）
+                        # 接收客户端初始化消息
                         client_username = data.get('username', '-')
                         client_user_id = data.get('user_id', '-')
-                        # 保存 username 和 user_id 映射
-                        if client_username and client_username != '-':
+                        
+                        # V2 需要验证账号绑定
+                        if is_v2:
+                            # 取消超时检查任务
+                            if init_timeout_task:
+                                init_timeout_task.cancel()
+                                try:
+                                    await init_timeout_task
+                                except asyncio.CancelledError:
+                                    pass
+                            
+                            # 如果已经验证过，忽略重复的init
+                            if is_verified:
+                                logger.debug(f"V2 客户端发送了重复的 init 消息，已忽略")
+                                continue
+                            
+                            if not client_username or client_username == '-':
+                                logger.warning(f"⚠️ V2 客户端未提供用户名，断开连接: {client_addr}")
+                                await websocket.close(code=1008, reason="V2 客户端必须提供用户名")
+                                break
+                            
+                            # 验证用户名
+                            is_valid, verified_user, error_msg = await verify_username_for_v2(client_username)
+                            if not is_valid:
+                                logger.warning(f"⚠️ V2 客户端验证失败: {client_addr} | 账号: {client_username} | 错误: {error_msg}")
+                                # WebSocket 关闭帧 reason 不能超过 123 字节，截断过长的消息
+                                close_reason = f"验证失败: {error_msg}"
+                                if len(close_reason.encode('utf-8')) > 123:
+                                    close_reason = "验证失败"
+                                await websocket.close(code=1008, reason=close_reason)
+                                break
+                            
+                            is_verified = True
+                            
+                            # 断开同一账号的相反版本连接（互斥逻辑：V1和V2互斥）
+                            await disconnect_opposite_version_connections(client_username, websocket, 'v2')
+                            
+                            # 保存账号映射（V2使用集合，支持多个连接）
+                            if client_username not in account_to_websocket_v2:
+                                account_to_websocket_v2[client_username] = set()
+                            account_to_websocket_v2[client_username].add(websocket)
+                            
+                            # 保存 username 映射
                             client_username_map[websocket] = client_username
-                        if client_user_id and client_user_id != '-':
-                            client_user_id_map[websocket] = client_user_id
-                        if client_username and client_username != '-':
-                            user_id_display = f" | 用户标识: {client_user_id}" if client_user_id and client_user_id != '-' else ""
-                            logger.info(f"🔌 客户端账号信息: {client_addr} | 账号: {client_username}{user_id_display}")
-                            save_connections_to_file()  # 更新连接信息
+                            # 保存 V2 连接对应的用户对象（用于数据归属，确保数据归属到验证时的用户）
+                            if verified_user:
+                                websocket_user_map[websocket] = verified_user
+                                logger.info(f"✅ V2 客户端验证通过: {client_addr} | 账号: {client_username} | 用户: {verified_user.username}")
+                            if client_user_id and client_user_id != '-':
+                                client_user_id_map[websocket] = client_user_id
+                            
+                            # 发送验证通过消息
+                            server_time = datetime.now()
+                            server_timestamp_ms = int(server_time.timestamp() * 1000)
+                            welcome_msg = {
+                                'type': 'connected',
+                                'message': '已连接到代码分发服务（V2）',
+                                'timestamp': server_time.isoformat(),
+                                'server_timestamp_ms': server_timestamp_ms
+                            }
+                            await websocket.send(json.dumps(welcome_msg, ensure_ascii=False))
+                            logger.info(f"✅ V2 客户端验证通过: {client_addr} | 账号: {client_username}")
+                            save_connections_to_file()
+                        else:
+                            # V1 不需要验证，直接保存
+                            # 如果提供了用户名，断开同一账号的V2连接（互斥逻辑：V1和V2互斥）
+                            if client_username and client_username != '-':
+                                await disconnect_opposite_version_connections(client_username, websocket, 'v1')
+                                # 保存账号映射（V1使用集合，支持多个连接）
+                                if client_username not in account_to_websocket_v1:
+                                    account_to_websocket_v1[client_username] = set()
+                                account_to_websocket_v1[client_username].add(websocket)
+                            
+                            # 保存 username 和 user_id 映射
+                            if client_username and client_username != '-':
+                                client_username_map[websocket] = client_username
+                            if client_user_id and client_user_id != '-':
+                                client_user_id_map[websocket] = client_user_id
+                            if client_username and client_username != '-':
+                                user_id_display = f" | 用户标识: {client_user_id}" if client_user_id and client_user_id != '-' else ""
+                                logger.info(f"🔌 客户端账号信息: {client_addr} | 账号: {client_username}{user_id_display} (V1)")
+                                save_connections_to_file()  # 更新连接信息
                     elif data.get('type') == 'ping':
+                        # V2 未验证前不响应心跳
+                        if is_v2 and not is_verified:
+                            continue
                         # 响应心跳
                         pong_msg = {
                             'type': 'pong',
@@ -889,8 +1197,11 @@ async def websocket_handler(websocket, path):
                         }
                         await websocket.send(json.dumps(pong_msg, ensure_ascii=False))
                     elif data.get('type') == 'claim_result':
-                        # 处理领取结果（异步执行，不阻塞）
-                        asyncio.create_task(handle_claim_result(data))
+                        # V2 未验证前不处理领取结果
+                        if is_v2 and not is_verified:
+                            continue
+                        # 处理领取结果（异步执行，不阻塞，传入 websocket 用于判断版本）
+                        asyncio.create_task(handle_claim_result(data, websocket))
                 except json.JSONDecodeError:
                     logger.warning(f"⚠️ 收到无效的 JSON 消息: {message}")
                 except Exception as e:
@@ -911,6 +1222,14 @@ async def websocket_handler(websocket, path):
                 await heartbeat
             except asyncio.CancelledError:
                 pass
+            
+            # 取消V2超时检查任务
+            if init_timeout_task:
+                init_timeout_task.cancel()
+                try:
+                    await init_timeout_task
+                except asyncio.CancelledError:
+                    pass
                 
     except websockets.exceptions.ConnectionClosed:
         pass
@@ -929,23 +1248,43 @@ async def websocket_handler(websocket, path):
     finally:
         # 记录移除日志（如果有用户名）
         client_username = client_username_map.get(websocket)
+        connection_version = websocket_version_map.get(websocket, 'unknown')
         if client_username:
-            logger.info(f"🔌 客户端账号信息: {client_addr} | 账号: {client_username} | 已断开")
+            logger.info(f"🔌 客户端账号信息: {client_addr} | 账号: {client_username} | 版本: {connection_version} | 已断开")
+        
+        # 从账号映射中移除
+        if client_username:
+            if connection_version == 'v1':
+                account_to_websocket_v1.get(client_username, set()).discard(websocket)
+                if not account_to_websocket_v1.get(client_username):
+                    account_to_websocket_v1.pop(client_username, None)
+            elif connection_version == 'v2':
+                account_to_websocket_v2.get(client_username, set()).discard(websocket)
+                if not account_to_websocket_v2.get(client_username):
+                    account_to_websocket_v2.pop(client_username, None)
         
         connected_clients.discard(websocket)
         client_username_map.pop(websocket, None)  # 移除 username 映射
         client_user_id_map.pop(websocket, None)  # 移除 user_id 映射
         client_addr_map.pop(websocket, None)  # 移除地址映射
         client_connect_time_map.pop(websocket, None)  # 移除连接时间映射
+        websocket_version_map.pop(websocket, None)  # 移除版本映射
+        websocket_user_map.pop(websocket, None)  # 移除 V2 用户映射
         save_connections_to_file()  # 更新连接信息
 
 
-async def handle_claim_result(data):
-    """处理客户端发送的领取结果，并入库到 ClaimRecord（不关联 account）"""
+async def handle_claim_result(data, websocket=None):
+    """处理客户端发送的领取结果，并入库到 ClaimRecord
+    
+    Args:
+        data: 领取结果数据
+        websocket: WebSocket 连接对象（可选，用于判断是 V1 还是 V2）
+    """
     try:
         from asgiref.sync import sync_to_async
+        from django.contrib.auth.models import User
         
-        user_id = data.get('user_id')  # 用户标识符（用于区分不同使用者）
+        user_id = data.get('user_id')  # 用户标识符（V1 使用）
         code = data.get('code')
         username = data.get('username')  # Stake 账号用户名
         status = data.get('status', 'error')
@@ -959,6 +1298,62 @@ async def handle_claim_result(data):
         if not code:
             logger.warning("⚠️ 收到无效的领取结果（缺少代码）")
             return
+        
+        # 判断是 V1 还是 V2 连接
+        is_v2 = False
+        if websocket:
+            connection_version = websocket_version_map.get(websocket)
+            is_v2 = (connection_version == 'v2')
+        # 如果没有提供 websocket，通过是否有 user_id 判断（V2 不发送 user_id）
+        elif not user_id:
+            is_v2 = True
+        
+        # V2 版本：根据连接时验证的用户对象确定归属（确保数据归属到验证时的用户）
+        user_obj = None
+        if is_v2:
+            # 优先使用连接时验证的用户对象（确保数据归属正确）
+            if websocket and websocket in websocket_user_map:
+                user_obj = websocket_user_map[websocket]
+                logger.info(f"✅ V2 领取结果：使用连接时验证的用户 {user_obj.username} (账号: {username})")
+            elif username and username != '-':
+                # 备用方案：如果连接对象不存在，根据 username 查找用户
+                def find_user_by_username():
+                    try:
+                        # 查找 StakeAccount，获取关联的用户
+                        # 由于账号唯一性保证（一个账号只能属于一个用户），直接查找即可
+                        account = StakeAccount.objects.filter(
+                            stake_account_id=username,
+                            is_active=True
+                        ).first()
+                        if account:
+                            return account.user
+                        return None
+                    except Exception as e:
+                        logger.error(f"❌ 查找用户失败: {e}", exc_info=True)
+                        return None
+                
+                # 使用 sync_to_async 异步执行
+                user_obj = await sync_to_async(find_user_by_username)()
+                if user_obj:
+                    logger.info(f"✅ V2 领取结果：通过数据库查找找到用户 {user_obj.username} (账号: {username})")
+                else:
+                    logger.warning(f"⚠️ V2 领取结果：未找到账号 {username} 对应的用户")
+        else:
+            # V1 版本：根据 user_id 查找用户（通过 UserProfile.user_flag）
+            if user_id and user_id != '-':
+                def find_user_by_user_id():
+                    try:
+                        profile = UserProfile.objects.filter(user_flag=user_id).first()
+                        if profile:
+                            return profile.user
+                        return None
+                    except Exception as e:
+                        logger.error(f"❌ 查找用户失败: {e}", exc_info=True)
+                        return None
+                
+                user_obj = await sync_to_async(find_user_by_user_id)()
+                if user_obj:
+                    logger.info(f"✅ V1 领取结果：找到用户 {user_obj.username} (标识: {user_id})")
         
         # CodeRecord 已删除，不再查找
         
@@ -1006,7 +1401,7 @@ async def handle_claim_result(data):
         }
         final_status = status_mapping.get(status, 'error')
         
-        # 创建 ClaimRecord（只保存 username 字符串，不关联其他表）
+        # 创建 ClaimRecord
         # 使用 sync_to_async 包装同步的 Django ORM 操作
         try:
             from serverbot.models import ClaimRecord
@@ -1014,7 +1409,8 @@ async def handle_claim_result(data):
             # 定义同步函数
             def create_claim_record():
                 return ClaimRecord.objects.create(
-                    user_flag=user_id,  # 用户标识符（用于区分不同使用者，数据库字段已重命名为 user_flag）
+                    user=user_obj,  # 关联的用户对象（V2 通过 username 查找，V1 通过 user_id 查找）
+                    user_flag=user_id,  # 用户标识符（V1 使用，V2 为 None）
                     username=username,  # Stake 账号用户名（用于 WebSocket 领取记录）
                     code=code,
                     status=final_status,
@@ -1029,8 +1425,11 @@ async def handle_claim_result(data):
             
             # 使用 sync_to_async 异步执行
             claim_record = await sync_to_async(create_claim_record)()
-            user_display = f"{user_id or '未知用户'}" + (f" ({username})" if username else "")
-            logger.info(f"✅ 领取结果已入库: {user_display} - {code} ({final_status})")
+            version_str = "V2" if is_v2 else "V1"
+            user_display = f"{user_obj.username if user_obj else '未知用户'}" + (f" ({username})" if username else "")
+            if is_v2:
+                user_display = f"{user_display} [账号绑定验证]"
+            logger.info(f"✅ {version_str} 领取结果已入库: {user_display} - {code} ({final_status})")
         except Exception as e:
             logger.error(f"❌ 创建 ClaimRecord 失败: {e}", exc_info=True)
             
