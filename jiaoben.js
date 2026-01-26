@@ -196,11 +196,14 @@
     let ws = null;
     let reconnectAttempts = 0;
     let isConnecting = false;
-    let lastPingTime = null;  // 记录最后一次发送 ping 的时间戳
     let statusElement = null;
     let serverTimeOffset = 0;  // 服务器时间偏移量（服务器时间 - 客户端时间，毫秒）
     let sessionCache = null;  // session 缓存（只获取一次，和登录绑定，不变）
     let lastConnectionStatus = null;  // 上一次的连接状态（'connected', 'disconnected', 'error'），用于判断状态变化
+    let dragMouseMoveHandler = null;  // 拖拽 mousemove 监听器引用（用于清理）
+    let dragMouseUpHandler = null;  // 拖拽 mouseup 监听器引用（用于清理）
+    let resizeMouseMoveHandler = null;  // 调整大小 mousemove 监听器引用（用于清理）
+    let resizeMouseUpHandler = null;  // 调整大小 mouseup 监听器引用（用于清理）
     
     // 全局 WebSocket 实例检查（火狐浏览器兼容性）
     // 使用顶层窗口（window.top）存储 WebSocket 实例，实现跨 iframe 共享
@@ -317,7 +320,7 @@
             #stake-ws-panel.collapsed #stake-ws-log-container,
             #stake-ws-panel.collapsed #stake-ws-resize-handle,
             #stake-ws-panel.collapsed #stake-ws-username,
-            #stake-ws-panel.collapsed #stake-ws-ping-vault-container,
+            #stake-ws-panel.collapsed #stake-ws-vault-container,
             #stake-ws-panel.collapsed #stake-ws-test-vault-btn { display: none; }
             #stake-ws-panel.collapsed #stake-ws-header {
                 background: transparent; border: none; margin: 0; padding: 0;
@@ -401,7 +404,7 @@
                 margin-bottom: 8px;
             }
             
-            #stake-ws-ping-vault-container {
+            #stake-ws-vault-container {
                 display: flex;
                 align-items: center;
                 justify-content: space-between;
@@ -413,25 +416,6 @@
                 margin-right: 6px;
             }
             #stake-ws-username .username-value {
-                color: #6df5f0;
-                font-weight: 700;
-            }
-            
-            #stake-ws-ping {
-                font-size: 12px;
-                color: #b0b0b5;
-                padding: 4px 8px;
-                background: #16191f;
-                border: 1px solid #23262d;
-                border-radius: 4px;
-                font-weight: 600;
-                white-space: nowrap;
-            }
-            #stake-ws-ping .ping-label {
-                color: #8a8d92;
-                margin-right: 6px;
-            }
-            #stake-ws-ping .ping-value {
                 color: #6df5f0;
                 font-weight: 700;
             }
@@ -556,14 +540,10 @@
                 '<span class="username-label">user:</span>' +
                 '<span class="username-value" id="stake-ws-username-value">-</span>' +
             '</div>' +
-            '<div id="stake-ws-ping-vault-container">' +
+            '<div id="stake-ws-vault-container">' +
                 '<div id="stake-ws-vault-switch">' +
                     '<span class="switch-label">存入保险库</span>' +
                     '<div class="switch-checkbox" id="stake-ws-vault-checkbox"></div>' +
-                '</div>' +
-                '<div id="stake-ws-ping">' +
-                    '<span class="ping-label">ping:</span>' +
-                    '<span class="ping-value" id="stake-ws-ping-value">-</span>' +
                 '</div>' +
             '</div>' +
             '<div id="stake-ws-test-vault-btn">测试存入 1 USDT</div>' +
@@ -675,7 +655,8 @@
             }
         });
 
-        document.addEventListener('mousemove', (e) => {
+        // 保存监听器引用以便清理
+        dragMouseMoveHandler = (e) => {
             if (isDragging) {
                 const deltaX = e.clientX - dragStartX;
                 const deltaY = e.clientY - dragStartY;
@@ -683,16 +664,18 @@
                 statusElement.style.top = (panelStartY + deltaY) + 'px';
                 statusElement.style.right = 'auto';
             }
-        });
+        };
+        document.addEventListener('mousemove', dragMouseMoveHandler);
 
-        document.addEventListener('mouseup', () => {
+        dragMouseUpHandler = () => {
             if (isDragging) {
                 isDragging = false;
                 if (isPanelCollapsed) {
                     checkAndSnapToEdge();
                 }
             }
-        });
+        };
+        document.addEventListener('mouseup', dragMouseUpHandler);
 
         // 边缘吸附（只在收起状态，左右两侧，自动吸附到最近的边缘）
         function checkAndSnapToEdge() {
@@ -739,7 +722,8 @@
             }
         });
 
-        document.addEventListener('mousemove', (e) => {
+        // 保存监听器引用以便清理
+        resizeMouseMoveHandler = (e) => {
             if (isResizing && !isPanelCollapsed) {
                 const deltaX = e.clientX - resizeStartX;
                 const deltaY = e.clientY - resizeStartY;
@@ -756,13 +740,15 @@
                 statusElement.style.height = finalHeight + 'px';
                 statusElement.dataset.hasCustomSize = 'true'; // 标记已自定义尺寸
             }
-        });
+        };
+        document.addEventListener('mousemove', resizeMouseMoveHandler);
 
-        document.addEventListener('mouseup', () => {
+        resizeMouseUpHandler = () => {
             if (isResizing) {
                 isResizing = false;
             }
-        });
+        };
+        document.addEventListener('mouseup', resizeMouseUpHandler);
 
         // 初始日志
         addLog('系统初始化...', 'info');
@@ -850,43 +836,15 @@
             statusDot.classList.add('connected');
         } else if (status === 'connecting') {
             statusDot.classList.add('connecting');
-            updatePingDisplay(null);  // 连接中时重置 ping 显示
         } else {
             // error 状态保持默认红色，不需要添加类
-            updatePingDisplay(null);  // 错误时重置 ping 显示
         }
     }
     
-    // 更新 ping 延迟显示
-    function updatePingDisplay(pingMs) {
-        const pingElement = document.getElementById('stake-ws-ping-value');
-        if (!pingElement) return;
-        
-        if (pingMs !== null && pingMs !== undefined) {
-            pingElement.textContent = `${pingMs}ms`;
-            // 根据延迟设置颜色：绿色(<100ms), 黄色(100-300ms), 红色(>300ms)
-            if (pingMs < 100) {
-                pingElement.style.color = '#34c759';  // 绿色
-            } else if (pingMs < 300) {
-                pingElement.style.color = '#ffcc00';  // 黄色
-            } else {
-                pingElement.style.color = '#ff6b60';  // 红色
-            }
-        } else {
-            pingElement.textContent = '-';
-            pingElement.style.color = '#6df5f0';  // 默认青色
-        }
-    }
-    
-    // 处理 pong 响应，计算延迟
-    function handlePong(data) {
-        if (lastPingTime) {
-            const now = Date.now();
-            const pingMs = now - lastPingTime;
-            updatePingDisplay(pingMs);
-            lastPingTime = null;  // 清除时间戳
-        }
-    }
+    // 处理 pong 响应（已不再使用，服务器端会主动发送 WebSocket ping）
+    // function handlePong(data) {
+    //     // 已移除客户端心跳，不再计算延迟
+    // }
 
     // 更新用户名显示
     function updateUsernameDisplay() {
@@ -1167,19 +1125,16 @@
                     }
                 } else {
                     // 如果连接前未获取到用户名，延迟发送初始化消息，等待页面完全加载后再获取
-                    // 延迟 2 秒，确保页面数据已加载完成（火狐浏览器可能需要更长时间）
-                    setTimeout(function() {
-                        if (ws && ws.readyState === WebSocket.OPEN) {
-                            // 多次尝试获取用户名（最多尝试 5 次，每次间隔 1 秒，兼容火狐浏览器）
-                            let attempts = 0;
-                            const maxAttempts = 5;
-                            
-                            function trySendInit() {
-                                attempts++;
+                    // 优化：浏览器冷启动时页面加载较慢，增加延迟和重试次数
+                    let initSent = false;  // 标记是否已发送 init 消息
+                    
+                    // 发送 init 消息的函数
+                    function sendInitMessage() {
+                        if (initSent || !ws || ws.readyState !== WebSocket.OPEN) {
+                            return false;
+                        }
                                 const username = getUsernameFromPage();
-                                
                                 if (username && isValidUsername(username)) {
-                                    // 获取到有效用户名，立即发送
                                     try {
                                         ws.send(JSON.stringify({
                                             type: 'init',
@@ -1187,13 +1142,42 @@
                                             user_id: USER_ID
                                         }));
                                         wsLog('已发送初始化消息，用户名:', username);
+                                initSent = true;
+                                return true;
                                     } catch (e) {
                                         wsError('发送初始化消息失败:', e);
+                                return false;
                                     }
-                                } else if (attempts < maxAttempts) {
+                        }
+                        return false;
+                    }
+                    
+                    // 等待页面完全加载后再开始获取（优先等待 DOMContentLoaded 或 window.load）
+                    // 用户名从 GraphQL 响应的 script 标签中获取，无需监听 DOM 变化
+                    function startUsernameRetry() {
+                        if (initSent || !ws || ws.readyState !== WebSocket.OPEN) {
+                            return;
+                        }
+                        
+                        // 多次尝试获取用户名（增加重试次数和间隔，适配冷启动场景）
+                        let attempts = 0;
+                        const maxAttempts = 15;  // 增加到 15 次
+                        const retryInterval = 2000;  // 增加到 2 秒间隔
+                        
+                        function trySendInit() {
+                            if (initSent || !ws || ws.readyState !== WebSocket.OPEN) {
+                                return;
+                            }
+                            
+                            attempts++;
+                            if (sendInitMessage()) {
+                                return;  // 成功发送，退出
+                            }
+                            
+                            if (attempts < maxAttempts) {
                                     // 未获取到有效用户名，继续尝试
-                                    wsWarn(`⚠️ 第 ${attempts} 次尝试获取用户名失败，继续尝试...`);
-                                    setTimeout(trySendInit, 1000);
+                                wsWarn(`⚠️ 第 ${attempts} 次尝试获取用户名失败，继续尝试... (${attempts}/${maxAttempts})`);
+                                setTimeout(trySendInit, retryInterval);
                                 } else {
                                     // 达到最大尝试次数，发送默认值
                                     wsWarn('⚠️ 达到最大尝试次数，未能获取到有效用户名，发送默认值');
@@ -1204,15 +1188,33 @@
                                             user_id: USER_ID
                                         }));
                                         wsLog('未能获取到有效用户名，已发送默认值');
+                                    initSent = true;
                                     } catch (e) {
                                         wsError('发送初始化消息失败:', e);
                                     }
                                 }
                             }
                             
+                        // 立即尝试一次
                             trySendInit();
                         }
-                    }, 2000);  // 延迟 2 秒开始获取用户名
+                    
+                    // 等待页面加载完成（优先使用 DOMContentLoaded，如果已经加载完成则直接开始）
+                    if (document.readyState === 'loading') {
+                        // 页面还在加载，等待 DOMContentLoaded
+                        document.addEventListener('DOMContentLoaded', function() {
+                            // 再延迟 3 秒，确保 GraphQL 数据已加载（冷启动时可能需要更长时间）
+                            setTimeout(startUsernameRetry, 3000);
+                        }, { once: true });
+                        
+                        // 同时监听 window.load 事件（作为备用）
+                        window.addEventListener('load', function() {
+                            setTimeout(startUsernameRetry, 2000);
+                        }, { once: true });
+                    } else {
+                        // 页面已经加载完成，延迟 5 秒后开始（给冷启动更多时间）
+                        setTimeout(startUsernameRetry, 5000);
+                    }
                 }
             };
 
@@ -1323,11 +1325,7 @@
             
             // 连接成功后更新用户名显示
             updateUsernameDisplay();
-            // 连接成功后立即发送一次 ping 测试延迟
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                lastPingTime = Date.now();
-                ws.send(JSON.stringify({ type: 'ping' }));
-            }
+            // 服务器端会主动发送心跳，无需客户端发送
         } else if (data.type === 'code_detected') {
             // 如果消息包含服务器时间戳，更新时间偏移（用于更精确的时间同步）
             if (data.server_timestamp_ms) {
@@ -1339,8 +1337,8 @@
             addLog(`收到代码: ${data.code}`, 'info');
             handleCodeReceived(data);
         } else if (data.type === 'pong') {
-            // 心跳响应，计算延迟
-            handlePong(data);
+            // 服务器响应心跳（服务器端会主动发送心跳，这里只是兼容处理）
+            // 不再计算延迟，因为服务器端已主动发送 WebSocket ping
         }
     }
 
@@ -2350,13 +2348,7 @@
             setTimeout(connect, 1000);
         }
 
-        // 定期发送心跳
-        setInterval(() => {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                lastPingTime = Date.now();  // 记录发送时间
-                ws.send(JSON.stringify({ type: 'ping' }));
-            }
-        }, 30000);  // 每30秒发送一次心跳
+        // 不再需要客户端主动发送心跳，服务器端会主动发送 WebSocket ping 保持连接活跃
     }
 
     // 启动脚本
