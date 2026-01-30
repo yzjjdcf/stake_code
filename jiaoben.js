@@ -1153,7 +1153,7 @@
                     }
                     
                     // 等待页面完全加载后再开始获取（优先等待 DOMContentLoaded 或 window.load）
-                    // 用户名从 GraphQL 响应的 script 标签中获取，无需监听 DOM 变化
+                    // 用户名从 GraphQL 响应的 script 标签中获取，需要等待 GraphQL 数据加载完成
                     function startUsernameRetry() {
                         if (initSent || !ws || ws.readyState !== WebSocket.OPEN) {
                             return;
@@ -1161,8 +1161,8 @@
                         
                         // 多次尝试获取用户名（增加重试次数和间隔，适配冷启动场景）
                         let attempts = 0;
-                        const maxAttempts = 15;  // 增加到 15 次
-                        const retryInterval = 2000;  // 增加到 2 秒间隔
+                        const maxAttempts = 25;  // 增加到 25 次
+                        const retryInterval = 3000;  // 增加到 3 秒间隔（给 GraphQL 数据更多加载时间）
                         
                         function trySendInit() {
                             if (initSent || !ws || ws.readyState !== WebSocket.OPEN) {
@@ -1170,50 +1170,84 @@
                             }
                             
                             attempts++;
+                            
+                            // 检查是否有 GraphQL script 标签存在（即使内容可能还没加载）
+                            const hasGraphQLScripts = document.querySelectorAll('script[type="application/json"][data-sveltekit-fetched], script[type="application/json"]').length > 0;
+                            
                             if (sendInitMessage()) {
                                 return;  // 成功发送，退出
                             }
                             
                             if (attempts < maxAttempts) {
-                                    // 未获取到有效用户名，继续尝试
-                                wsWarn(`⚠️ 第 ${attempts} 次尝试获取用户名失败，继续尝试... (${attempts}/${maxAttempts})`);
-                                setTimeout(trySendInit, retryInterval);
+                                // 未获取到有效用户名，继续尝试
+                                if (!hasGraphQLScripts && attempts <= 5) {
+                                    // 前5次如果连 script 标签都没有，说明页面还在加载
+                                    wsWarn(`⚠️ 第 ${attempts} 次尝试：GraphQL script 标签尚未出现，等待页面加载... (${attempts}/${maxAttempts})`);
                                 } else {
-                                    // 达到最大尝试次数，发送默认值
-                                    wsWarn('⚠️ 达到最大尝试次数，未能获取到有效用户名，发送默认值');
-                                    try {
-                                        ws.send(JSON.stringify({
-                                            type: 'init',
-                                            username: '-',
-                                            user_id: USER_ID
-                                        }));
-                                        wsLog('未能获取到有效用户名，已发送默认值');
+                                    wsWarn(`⚠️ 第 ${attempts} 次尝试获取用户名失败，继续尝试... (${attempts}/${maxAttempts})`);
+                                }
+                                setTimeout(trySendInit, retryInterval);
+                            } else {
+                                // 达到最大尝试次数，发送默认值
+                                wsWarn('⚠️ 达到最大尝试次数，未能获取到有效用户名，发送默认值');
+                                try {
+                                    ws.send(JSON.stringify({
+                                        type: 'init',
+                                        username: '-',
+                                        user_id: USER_ID
+                                    }));
+                                    wsLog('未能获取到有效用户名，已发送默认值');
                                     initSent = true;
-                                    } catch (e) {
-                                        wsError('发送初始化消息失败:', e);
-                                    }
+                                } catch (e) {
+                                    wsError('发送初始化消息失败:', e);
                                 }
                             }
+                        }
                             
                         // 立即尝试一次
-                            trySendInit();
-                        }
+                        trySendInit();
+                    }
                     
-                    // 等待页面加载完成（优先使用 DOMContentLoaded，如果已经加载完成则直接开始）
+                    // 优化：在多个时机尝试获取，确保 GraphQL 数据已加载
+                    // 1. 等待 DOMContentLoaded（DOM 加载完成）
+                    // 2. 等待 window.load（所有资源加载完成）
+                    // 3. 等待额外的延迟（确保 GraphQL 数据加载完成）
+                    // 4. 如果页面已加载，直接开始但延迟更长时间
+                    
+                    let retryStarted = false;
+                    function startRetryOnce(delay, reason) {
+                        if (retryStarted) return;
+                        retryStarted = true;
+                        wsLog(`开始获取用户名（${reason}，延迟 ${delay}ms）`);
+                        setTimeout(startUsernameRetry, delay);
+                    }
+                    
                     if (document.readyState === 'loading') {
-                        // 页面还在加载，等待 DOMContentLoaded
+                        // 页面还在加载
+                        // 时机1: DOMContentLoaded（DOM 加载完成）
                         document.addEventListener('DOMContentLoaded', function() {
-                            // 再延迟 3 秒，确保 GraphQL 数据已加载（冷启动时可能需要更长时间）
-                            setTimeout(startUsernameRetry, 3000);
+                            // 延迟 5 秒，确保 GraphQL 数据已加载（冷启动时可能需要更长时间）
+                            startRetryOnce(5000, 'DOMContentLoaded');
                         }, { once: true });
                         
-                        // 同时监听 window.load 事件（作为备用）
+                        // 时机2: window.load（所有资源加载完成）
                         window.addEventListener('load', function() {
-                            setTimeout(startUsernameRetry, 2000);
+                            // 延迟 3 秒，确保 GraphQL 数据已加载
+                            startRetryOnce(3000, 'window.load');
                         }, { once: true });
+                        
+                        // 时机3: 额外延迟（作为备用，确保 GraphQL 数据加载完成）
+                        setTimeout(function() {
+                            startRetryOnce(8000, '额外延迟（备用）');
+                        }, 10000);
+                    } else if (document.readyState === 'interactive') {
+                        // DOM 已加载但资源可能还在加载
+                        // 延迟 6 秒，确保 GraphQL 数据已加载
+                        startRetryOnce(6000, 'interactive 状态');
                     } else {
-                        // 页面已经加载完成，延迟 5 秒后开始（给冷启动更多时间）
-                        setTimeout(startUsernameRetry, 5000);
+                        // 页面已经完全加载完成（complete）
+                        // 延迟 8 秒后开始（给冷启动更多时间，确保 GraphQL 数据加载完成）
+                        startRetryOnce(8000, 'complete 状态');
                     }
                 }
             };
@@ -1480,6 +1514,7 @@
     }
     
     // 从页面中获取用户名（懒加载：延迟获取，等待页面完全加载）
+    // 优化：专注于从 GraphQL 响应中提取，确保数据完整性
     function getUsernameFromPage() {
         // 如果缓存中有用户名，直接返回（避免 CSP 错误后无法获取）
         if (usernameCache) {
@@ -1489,11 +1524,25 @@
         try {
             // 方式1: 从 GraphQL 响应中提取（最可靠的方式）
             // 查找所有包含 GraphQL 数据的 script 标签（支持多种格式，兼容火狐浏览器）
+            // 优先查找带有 data-sveltekit-fetched 属性的（SvelteKit 预加载的数据）
             const graphqlScripts = document.querySelectorAll('script[type="application/json"][data-sveltekit-fetched], script[type="application/json"]');
+            
+            // 如果没有找到任何 script 标签，返回 null（可能还在加载）
+            if (graphqlScripts.length === 0) {
+                return null;
+            }
+            
+            // 遍历所有 script 标签，仔细检查每个标签的内容
             for (const script of graphqlScripts) {
                 try {
-                    const scriptText = script.textContent || script.innerHTML;
+                    // 获取 script 标签的文本内容（优先使用 textContent，如果为空则使用 innerHTML）
+                    let scriptText = script.textContent;
                     if (!scriptText || scriptText.trim().length === 0) {
+                        scriptText = script.innerHTML;
+                    }
+                    
+                    // 如果内容为空或太短，跳过（可能还在加载）
+                    if (!scriptText || scriptText.trim().length < 10) {
                         continue;
                     }
                     
@@ -1501,21 +1550,22 @@
                     try {
                         jsonData = JSON.parse(scriptText);
                     } catch (e) {
+                        // JSON 解析失败，跳过这个 script 标签
                         continue;
                     }
                     
                     // 检查是否有 user.name 字段（支持多种数据结构）
                     let userData = null;
                     
-                    // 结构1: jsonData.body -> bodyData.data.user.name
+                    // 结构1: jsonData.body -> bodyData.data.user.name（SvelteKit 预加载格式）
                     if (jsonData.body) {
                         try {
                             const bodyData = typeof jsonData.body === 'string' ? JSON.parse(jsonData.body) : jsonData.body;
-                            if (bodyData.data && bodyData.data.user && bodyData.data.user.name) {
+                            if (bodyData && bodyData.data && bodyData.data.user && bodyData.data.user.name) {
                                 userData = bodyData.data.user;
                             }
                         } catch (e) {
-                            // 忽略解析错误
+                            // 忽略解析错误，继续尝试其他结构
                         }
                     }
                     
@@ -1529,6 +1579,7 @@
                         userData = jsonData.user;
                     }
                     
+                    // 如果找到用户数据，验证并返回
                     if (userData && userData.name) {
                         const username = userData.name;
                         if (isValidUsername(username)) {
@@ -1538,10 +1589,13 @@
                         }
                     }
                 } catch (e) {
-                    // 跳过解析失败的 script 标签
+                    // 跳过解析失败的 script 标签，继续检查下一个
                     continue;
                 }
             }
+            
+            // 如果遍历完所有 script 标签都没找到，返回 null（可能数据还没加载完成）
+            return null;
 
 
 

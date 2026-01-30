@@ -463,7 +463,7 @@ def process_message_async(update):
 
         parser_name = channel_id_map.get(chat_id, 'default_parser')
         parser_func = CODE_PARSERS.get(parser_name, parse_code_default)
-        TEST_USERNAMES = ['yzjjdcf']
+        TEST_USERNAMES = ['yzjjdcf', 'qqqq465430525']
         is_test_channel = (chat_id == TEST_CHANNEL_ID)
         FC_CHANNEL_ID = -1002140237447
         is_fc_channel = (chat_id == FC_CHANNEL_ID)
@@ -1071,13 +1071,21 @@ async def websocket_handler(websocket, path):
                         # 发送 ping 帧
                         await websocket.ping()
                         last_ping_time = time.time()
+                    except (websockets.exceptions.ConnectionClosed,
+                            websockets.exceptions.ConnectionClosedError,
+                            websockets.exceptions.ConnectionClosedOK):
+                        # 连接已关闭，退出循环
+                        break
                     except Exception as e:
                         # ping 失败，连接可能已断开
+                        logger.debug(f"心跳 ping 失败: {e}")
                         break
             except asyncio.CancelledError:
+                # 任务被取消，正常退出
                 pass
-            except Exception:
-                pass
+            except Exception as e:
+                # 捕获所有其他异常，避免 Future exception 警告
+                logger.debug(f"心跳任务异常: {e}")
         
         heartbeat = asyncio.create_task(heartbeat_task())
         
@@ -1201,7 +1209,16 @@ async def websocket_handler(websocket, path):
                         if is_v2 and not is_verified:
                             continue
                         # 处理领取结果（异步执行，不阻塞，传入 websocket 用于判断版本）
-                        asyncio.create_task(handle_claim_result(data, websocket))
+                        # 使用 create_task 并添加异常处理，避免 Future exception 警告
+                        task = asyncio.create_task(handle_claim_result(data, websocket))
+                        # 添加异常回调，确保异常被处理
+                        def handle_task_exception(task):
+                            try:
+                                task.result()  # 获取结果，如果有异常会抛出
+                            except Exception as e:
+                                # 异常已在 handle_claim_result 内部处理，这里只记录
+                                logger.debug(f"领取结果处理任务异常（已处理）: {e}")
+                        task.add_done_callback(handle_task_exception)
                 except json.JSONDecodeError:
                     logger.warning(f"⚠️ 收到无效的 JSON 消息: {message}")
                 except Exception as e:
@@ -1216,20 +1233,25 @@ async def websocket_handler(websocket, path):
             # 捕获其他异常，避免未处理的异常
             logger.error(f"❌ 读取消息时出错: {e}", exc_info=True)
         finally:
-            # 取消心跳任务
-            heartbeat.cancel()
-            try:
-                await heartbeat
-            except asyncio.CancelledError:
-                pass
+            # 取消心跳任务（静默处理所有异常，避免 Future exception 警告）
+            if heartbeat and not heartbeat.done():
+                heartbeat.cancel()
+                try:
+                    await asyncio.wait_for(heartbeat, timeout=1.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+                except Exception:
+                    pass  # 忽略所有其他异常
             
             # 取消V2超时检查任务
-            if init_timeout_task:
+            if init_timeout_task and not init_timeout_task.done():
                 init_timeout_task.cancel()
                 try:
-                    await init_timeout_task
-                except asyncio.CancelledError:
+                    await asyncio.wait_for(init_timeout_task, timeout=1.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
                     pass
+                except Exception:
+                    pass  # 忽略所有其他异常
                 
     except websockets.exceptions.ConnectionClosed:
         pass
